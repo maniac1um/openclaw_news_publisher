@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     openclaw_hmac_secret: str = Field(default="dev-secret")
     content_raw_dir: str = Field(default="content/reports/raw")
     content_rendered_dir: str = Field(default="content/reports/rendered")
+    git_auto_push: bool = Field(default=False)
+    git_remote: str = Field(default="origin")
+    git_branch: str = Field(default="main")
 
     model_config = SettingsConfigDict(env_prefix="OPENCLAW_", env_file=".env", extra="ignore")
 

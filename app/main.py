@@ -32,43 +32,162 @@ def index() -> HTMLResponse:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>OpenClaw 新闻报告</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f6f8fa; color: #1f2328; }
-    .wrap { max-width: 1100px; margin: 0 auto; padding: 24px; }
-    .card { background: #fff; border: 1px solid #d0d7de; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
-    h1,h2,h3 { margin: 0 0 12px; }
-    .muted { color: #57606a; font-size: 14px; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    ul { padding-left: 20px; }
-    button { border: 1px solid #1f883d; background: #1f883d; color: #fff; border-radius: 6px; padding: 8px 12px; cursor: pointer; }
-    button.secondary { border-color: #d0d7de; background: #fff; color: #1f2328; }
-    pre { white-space: pre-wrap; background: #f6f8fa; border: 1px solid #d0d7de; border-radius: 6px; padding: 12px; }
+    :root {
+      --bg: #f4f7fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --brand: #2563eb;
+      --brand-soft: #dbeafe;
+      --border: #e5e7eb;
+      --shadow: 0 10px 30px rgba(37, 99, 235, 0.10);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 0% 0%, #e7f0ff 0, transparent 30%), var(--bg);
+    }
+    .wrap { max-width: 1160px; margin: 0 auto; padding: 28px 20px 40px; }
+    .hero {
+      background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
+      color: #fff;
+      border-radius: 18px;
+      padding: 24px;
+      box-shadow: var(--shadow);
+      margin-bottom: 18px;
+    }
+    .hero h1 { margin: 0 0 10px; font-size: 30px; }
+    .hero p { margin: 0; opacity: .95; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    .toolbar input {
+      background: #ffffff;
+      border: 1px solid rgba(255,255,255,.45);
+      border-radius: 10px;
+      padding: 10px 12px;
+      min-width: 260px;
+      outline: none;
+    }
+    .toolbar button {
+      border: 0;
+      background: #0f172a;
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      transition: transform .12s ease, opacity .12s ease;
+    }
+    .toolbar button:hover { transform: translateY(-1px); opacity: .96; }
+    .toolbar button.secondary { background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); }
+    .grid { display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 16px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+      min-height: 420px;
+    }
+    .section-title { margin: 0 0 12px; font-size: 20px; }
+    .muted { color: var(--muted); font-size: 14px; }
+    #report-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+    .report-item {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      background: #fff;
+      transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
+      cursor: pointer;
+    }
+    .report-item:hover {
+      border-color: #93c5fd;
+      box-shadow: 0 8px 20px rgba(59, 130, 246, .12);
+      transform: translateY(-1px);
+    }
+    .report-item.active { background: var(--brand-soft); border-color: #60a5fa; }
+    .report-title { font-weight: 600; line-height: 1.4; margin-bottom: 4px; }
+    .badge {
+      display: inline-block;
+      background: #eff6ff;
+      color: #1e40af;
+      border: 1px solid #bfdbfe;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 12px;
+      margin-right: 6px;
+    }
+    .detail-header { margin-bottom: 10px; }
+    .detail-title { margin: 0 0 6px; font-size: 22px; line-height: 1.35; }
+    .meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .meta-chip {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 5px 10px;
+      font-size: 12px;
+      color: #334155;
+    }
+    .analysis {
+      background: #f8fafc;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      line-height: 1.7;
+      margin: 0 0 12px;
+    }
+    pre {
+      white-space: pre-wrap;
+      background: #0b1020;
+      color: #dbeafe;
+      border-radius: 10px;
+      padding: 12px;
+      max-height: 280px;
+      overflow: auto;
+      margin: 0;
+    }
+    @media (max-width: 920px) {
+      .grid { grid-template-columns: 1fr; }
+      .card { min-height: auto; }
+    }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="card">
-      <h1>OpenClaw 新闻报告页面</h1>
-      <div class="muted">面向用户查看已发布的关键词分析报告</div>
-      <div style="margin-top:12px;">
-        <button onclick="loadReports()">刷新报告列表</button>
-        <button class="secondary" onclick="location.href='/docs'">查看接口文档</button>
+    <div class="hero">
+      <h1>OpenClaw 新闻报告中心</h1>
+      <p>面向业务用户查看关键词趋势分析结果，支持即时刷新与详情浏览。</p>
+      <div class="toolbar">
+        <input id="keyword-search" placeholder="输入关键词筛选（如：羽毛球）" />
+        <button onclick="loadReports()">刷新报告</button>
+        <button class="secondary" onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
     <div class="grid">
       <div class="card">
-        <h2>报告列表</h2>
+        <h2 class="section-title">报告列表</h2>
         <ul id="report-list"></ul>
       </div>
       <div class="card">
-        <h2>报告详情</h2>
+        <h2 class="section-title">报告详情</h2>
         <div id="report-detail" class="muted">请先从左侧选择一个报告。</div>
       </div>
     </div>
   </div>
   <script>
-    async function loadReports() {
-      const res = await fetch('/api/v1/public/reports');
-      const data = await res.json();
+    let reportCache = [];
+    let activeIngestId = null;
+
+    function escapeHtml(text) {
+      return String(text ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function renderReportList(data) {
       const list = document.getElementById('report-list');
       list.innerHTML = '';
       if (!data.length) {
@@ -77,32 +196,61 @@ def index() -> HTMLResponse:
       }
       for (const r of data) {
         const li = document.createElement('li');
-        const a = document.createElement('a');
-        a.href = '#';
-        a.textContent = `${r.title}（${r.keyword}）`;
-        a.onclick = async (e) => { e.preventDefault(); await loadDetail(r.ingest_id); };
-        li.appendChild(a);
-        const span = document.createElement('div');
-        span.className = 'muted';
-        span.textContent = `生成时间：${r.generated_at}`;
-        li.appendChild(span);
+        li.className = 'report-item' + (activeIngestId === r.ingest_id ? ' active' : '');
+        li.onclick = async () => { await loadDetail(r.ingest_id); };
+        li.innerHTML = `
+          <div class="report-title">${escapeHtml(r.title || '未命名报告')}</div>
+          <div>
+            <span class="badge">${escapeHtml(r.keyword || '未分类')}</span>
+            <span class="muted">生成时间：${escapeHtml(r.generated_at || '-')}</span>
+          </div>
+        `;
         list.appendChild(li);
+      }
+    }
+
+    function getFilteredReports() {
+      const keyword = document.getElementById('keyword-search').value.trim().toLowerCase();
+      if (!keyword) return reportCache;
+      return reportCache.filter((r) => (r.keyword || '').toLowerCase().includes(keyword) || (r.title || '').toLowerCase().includes(keyword));
+    }
+
+    async function loadReports() {
+      const res = await fetch('/api/v1/public/reports');
+      const data = await res.json();
+      reportCache = data;
+      const filtered = getFilteredReports();
+      renderReportList(filtered);
+      if (filtered.length && !activeIngestId) {
+        await loadDetail(filtered[0].ingest_id);
       }
     }
 
     async function loadDetail(ingestId) {
       const res = await fetch(`/api/v1/public/reports/${ingestId}`);
       const r = await res.json();
+      activeIngestId = ingestId;
+      renderReportList(getFilteredReports());
       document.getElementById('report-detail').innerHTML = `
-        <h3>${r.title}</h3>
-        <div class="muted">关键词：${r.keyword}</div>
-        <div class="muted">时间范围：${r.time_range.start} ~ ${r.time_range.end}</div>
-        <div class="muted">来源：${(r.sources || []).join(', ')}</div>
-        <p>${r.analysis || ''}</p>
-        <h4>条目（${r.items_count}）</h4>
-        <pre>${JSON.stringify(r.items || [], null, 2)}</pre>
+        <div class="detail-header">
+          <h3 class="detail-title">${escapeHtml(r.title || '未命名报告')}</h3>
+          <div class="meta-row">
+            <span class="meta-chip">关键词：${escapeHtml(r.keyword || '-')}</span>
+            <span class="meta-chip">条目数：${escapeHtml(r.items_count || 0)}</span>
+            <span class="meta-chip">生成时间：${escapeHtml(r.generated_at || '-')}</span>
+          </div>
+          <div class="muted">时间范围：${escapeHtml(r.time_range?.start || '-')} ~ ${escapeHtml(r.time_range?.end || '-')}</div>
+          <div class="muted">来源：${escapeHtml((r.sources || []).join(', ') || '-')}</div>
+        </div>
+        <p class="analysis">${escapeHtml(r.analysis || '暂无分析内容')}</p>
+        <h4>结构化条目 JSON</h4>
+        <pre>${escapeHtml(JSON.stringify(r.items || [], null, 2))}</pre>
       `;
     }
+
+    document.getElementById('keyword-search').addEventListener('input', () => {
+      renderReportList(getFilteredReports());
+    });
 
     loadReports();
   </script>

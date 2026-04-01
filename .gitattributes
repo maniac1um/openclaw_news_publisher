@@ -1,0 +1,13 @@
+# Normalize line endings to LF in the repository (Windows + Linux friendly)
+* text=auto eol=lf
+
+# Explicit binary paths (do not modify line endings)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

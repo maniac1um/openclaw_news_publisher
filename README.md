@@ -34,6 +34,7 @@
 
 ```text
 openclaw_news_publisher/
+├─ .gitattributes
 ├─ app/
 │  ├─ api/v1/openclaw.py
 │  ├─ core/
@@ -55,7 +56,8 @@ openclaw_news_publisher/
 │     └─ rendered/
 ├─ docs/
 │  ├─ api/openclaw-intake.md
-│  └─ architecture/news-pipeline.md
+│  ├─ architecture/news-pipeline.md
+│  └─ cross-platform-development.md
 ├─ scripts/publish_site.py
 ├─ tests/
 │  ├─ api/test_openclaw_intake.py
@@ -89,6 +91,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 首页：`http://127.0.0.1:8000/`
 - 文档：`http://127.0.0.1:8000/docs`
 - 健康检查：`http://127.0.0.1:8000/healthz`
+
+在 **Windows 与 Ubuntu** 等多台机器上基于 GitHub 协作开发时，参见 [docs/cross-platform-development.md](docs/cross-platform-development.md)。
 
 ## 配置项（环境变量）
 

@@ -16,9 +16,13 @@
   - `GET /api/v1/openclaw/reports/{ingest_id}`
   - `POST /api/v1/openclaw/reports/{ingest_id}/retry`（预留）
 - 用户页面与公开查询 API
-  - `/`（报告列表 + 报告详情）
+  - `/`（新闻动态：首页报告列表 + Markdown 详情）
+  - `/topic-analysis`（专题分析：开发中）
+  - `/price-trend`（价格趋势：开发中）
+  - `/keyword-tracking`（关键词追踪：开发中）
   - `GET /api/v1/public/reports`
   - `GET /api/v1/public/reports/{ingest_id}`
+  - `POST /api/v1/public/reports/bulk-delete`（批量删除）
 - 文档与运维
   - `/docs`（Swagger）
   - `/healthz`（健康检查）
@@ -145,6 +149,33 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `published`
 - `failed`
 
+## 门户端删除接口（可复用）
+
+用于门户端或后续自动清理任务删除报告文件（raw + rendered 同步删除）：
+
+`POST /api/v1/public/reports/bulk-delete`
+
+请求体：
+
+```json
+{
+  "ingest_ids": [
+    "b5f072a5-0594-46df-903c-538c3b0dee22",
+    "5b21bf16-07d7-4360-b468-b570a102c0fb"
+  ]
+}
+```
+
+返回体：
+
+```json
+{
+  "requested": 2,
+  "deleted": ["..."],
+  "not_found": []
+}
+```
+
 ## 本地联调示例（PowerShell）
 
 ```powershell
@@ -210,6 +241,9 @@ pytest -q
 3. 用户页面无数据
    - 先确认 `POST /api/v1/openclaw/reports` 成功并且状态到 `published`。
    - 检查 `content/reports/rendered/` 是否生成 JSON 文件。
+
+4. 页面显示中文为 `???`
+   - 这通常是请求发送端编码问题，建议用 UTF-8 并设置 `Content-Type: application/json; charset=utf-8`。
 
 ## 后续建议
 

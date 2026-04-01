@@ -4,9 +4,11 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from app.api.v1.openclaw import router as openclaw_router
 from app.core.config import settings
+from app.services.report_management_service import ReportManagementService
 
 logging.basicConfig(
     level=logging.INFO,
@@ -19,6 +21,10 @@ app = FastAPI(
     version="0.1.0",
 )
 app.include_router(openclaw_router, prefix=settings.api_v1_prefix)
+
+
+class BulkDeleteRequest(BaseModel):
+    ingest_ids: list[str]
 
 
 @app.get("/")
@@ -99,10 +105,12 @@ def index() -> HTMLResponse:
       overflow-x: auto;
       white-space: nowrap;
     }
-    .nav li {
+    .nav li, .nav a {
       padding: 12px 0;
       border-bottom: 2px solid transparent;
       cursor: pointer;
+      color: inherit;
+      display: inline-block;
     }
     .nav li.active { border-color: var(--brand); color: var(--brand); font-weight: 600; }
     .page {
@@ -144,6 +152,11 @@ def index() -> HTMLResponse:
       padding: 7px 10px;
       cursor: pointer;
     }
+    .toolbar button.danger {
+      border-color: #b42318;
+      color: #b42318;
+      background: transparent;
+    }
     #report-list {
       list-style: none;
       margin: 0;
@@ -156,6 +169,10 @@ def index() -> HTMLResponse:
       border-bottom: 1px dashed var(--line);
       cursor: pointer;
       background: var(--surface);
+      display: grid;
+      grid-template-columns: 22px 1fr;
+      gap: 8px;
+      align-items: start;
     }
     .report-item:hover { background: var(--surface-2); }
     .report-item.active { border-left: 3px solid var(--brand); background: var(--surface-2); }
@@ -208,10 +225,10 @@ def index() -> HTMLResponse:
   <div class="nav">
     <div class="wrap">
       <ul id="category-nav">
-        <li class="active">新闻动态</li>
-        <li>专题分析</li>
-        <li>价格趋势</li>
-        <li>关键词追踪</li>
+        <li class="active"><a href="/">新闻动态</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
+        <li><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/keyword-tracking">关键词追踪</a></li>
       </ul>
     </div>
   </div>
@@ -222,6 +239,7 @@ def index() -> HTMLResponse:
         <div class="toolbar">
           <input id="keyword-search" placeholder="输入关键词筛选" />
           <button onclick="loadReports()">刷新</button>
+          <button class="danger" onclick="deleteSelectedReports()">删除选中</button>
         </div>
         <div class="status-line" id="report-count" style="padding: 0 14px;">加载中...</div>
         <ul id="report-list"></ul>
@@ -236,6 +254,7 @@ def index() -> HTMLResponse:
   <script>
     let reportCache = [];
     let activeIngestId = null;
+    let selectedIds = new Set();
 
     function escapeHtml(text) {
       return String(text ?? '')
@@ -258,8 +277,8 @@ def index() -> HTMLResponse:
     }
 
     function markdownToHtml(md) {
-      const src = (md || '').replace(/\r/g, '');
-      const lines = src.split('\n');
+      const src = (md || '').replace(/\\r/g, '');
+      const lines = src.split('\\n');
       let html = '';
       let inList = false;
       let inCode = false;
@@ -275,7 +294,7 @@ def index() -> HTMLResponse:
           continue;
         }
         if (inCode) {
-          html += escapeHtml(line) + '\n';
+          html += escapeHtml(line) + '\\n';
           continue;
         }
         if (/^###\\s+/.test(line)) { if (inList) { html += '</ul>'; inList = false; } html += `<h3>${escapeHtml(line.replace(/^###\\s+/, ''))}</h3>`; continue; }
@@ -343,12 +362,26 @@ def index() -> HTMLResponse:
       for (const r of data) {
         const li = document.createElement('li');
         li.className = 'report-item' + (activeIngestId === r.ingest_id ? ' active' : '');
-        li.onclick = async () => { await loadDetail(r.ingest_id); };
+        li.onclick = async (e) => {
+          if (e.target && e.target.classList.contains('row-check')) return;
+          await loadDetail(r.ingest_id);
+        };
         li.innerHTML = `
-          <div class="report-title">${escapeHtml(r.title || '未命名报告')}</div>
-          <div class="report-meta">关键词：${escapeHtml(r.keyword || '-')}</div>
-          <div class="report-meta">时间：${escapeHtml(r.generated_at || '-')}</div>
+          <input type="checkbox" class="row-check" data-id="${escapeHtml(r.ingest_id || '')}" ${selectedIds.has(r.ingest_id) ? 'checked' : ''} />
+          <div>
+            <div class="report-title">${escapeHtml(r.title || '未命名报告')}</div>
+            <div class="report-meta">关键词：${escapeHtml(r.keyword || '-')}</div>
+            <div class="report-meta">时间：${escapeHtml(r.generated_at || '-')}</div>
+          </div>
         `;
+        const checkbox = li.querySelector('.row-check');
+        checkbox?.addEventListener('click', (ev) => ev.stopPropagation());
+        checkbox?.addEventListener('change', (ev) => {
+          const checked = ev.target.checked;
+          const id = ev.target.getAttribute('data-id');
+          if (!id) return;
+          if (checked) selectedIds.add(id); else selectedIds.delete(id);
+        });
         list.appendChild(li);
       }
     }
@@ -356,31 +389,74 @@ def index() -> HTMLResponse:
     function getFilteredReports() {
       const keyword = document.getElementById('keyword-search').value.trim().toLowerCase();
       if (!keyword) return reportCache;
-      return reportCache.filter((r) => (r.keyword || '').toLowerCase().includes(keyword) || (r.title || '').toLowerCase().includes(keyword));
+      return reportCache.filter((r) => String(r.keyword || '').toLowerCase().includes(keyword) || String(r.title || '').toLowerCase().includes(keyword));
     }
 
     async function loadReports() {
-      const res = await fetch('/api/v1/public/reports');
-      const data = await res.json();
-      reportCache = data;
-      const filtered = getFilteredReports();
-      renderReportList(filtered);
-      if (filtered.length && !activeIngestId) {
-        await loadDetail(filtered[0].ingest_id);
+      try {
+        const res = await fetch('/api/v1/public/reports');
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        reportCache = Array.isArray(data) ? data : [];
+        const filtered = getFilteredReports();
+        renderReportList(filtered);
+        if (filtered.length && !activeIngestId) {
+          await loadDetail(filtered[0].ingest_id);
+        }
+      } catch (err) {
+        document.getElementById('report-count').textContent = '加载失败';
+        document.getElementById('report-list').innerHTML = `<li class="empty">报告加载失败：${escapeHtml(err?.message || '未知错误')}</li>`;
+        document.getElementById('report-detail').innerHTML = '<div class="detail-wrap muted">请检查服务是否正常，或点击“刷新”重试。</div>';
       }
     }
 
     async function loadDetail(ingestId) {
-      const res = await fetch(`/api/v1/public/reports/${ingestId}`);
-      const r = await res.json();
-      activeIngestId = ingestId;
-      renderReportList(getFilteredReports());
-      const md = reportToMarkdown(r);
-      document.getElementById('report-detail').innerHTML = markdownToHtml(md);
+      try {
+        const res = await fetch(`/api/v1/public/reports/${ingestId}`);
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const r = await res.json();
+        activeIngestId = ingestId;
+        renderReportList(getFilteredReports());
+        const md = r.report_markdown || reportToMarkdown(r);
+        document.getElementById('report-detail').innerHTML = markdownToHtml(md);
+      } catch (err) {
+        document.getElementById('report-detail').innerHTML = `<div class="detail-wrap muted">详情加载失败：${escapeHtml(err?.message || '未知错误')}</div>`;
+      }
+    }
+
+    async function deleteSelectedReports() {
+      if (!selectedIds.size) {
+        alert('请先勾选需要删除的报告。');
+        return;
+      }
+      if (!confirm(`确认删除选中的 ${selectedIds.size} 条报告吗？`)) return;
+      try {
+        const res = await fetch('/api/v1/public/reports/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ingest_ids: Array.from(selectedIds) }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        selectedIds.clear();
+        activeIngestId = null;
+        document.getElementById('report-detail').innerHTML = '<div class="detail-wrap muted">删除成功，请从左侧选择一个报告。</div>';
+        await loadReports();
+      } catch (err) {
+        alert(`删除失败：${err?.message || '未知错误'}`);
+      }
     }
 
     document.getElementById('keyword-search').addEventListener('input', () => {
       renderReportList(getFilteredReports());
+    });
+
+    window.addEventListener('error', (e) => {
+      document.getElementById('report-count').textContent = '页面脚本异常';
+      document.getElementById('report-list').innerHTML = `<li class="empty">前端脚本异常：${escapeHtml(e.message || 'unknown')}</li>`;
     });
 
     setupDarkMode();
@@ -394,6 +470,44 @@ def index() -> HTMLResponse:
 
 def _rendered_root() -> Path:
     return Path(settings.content_rendered_dir)
+
+
+def _raw_root() -> Path:
+    return Path(settings.content_raw_dir)
+
+
+def _report_mgmt() -> ReportManagementService:
+    return ReportManagementService(raw_root=_raw_root(), rendered_root=_rendered_root())
+
+
+def _report_to_markdown(report: dict) -> str:
+    lines: list[str] = []
+    lines.append(f"# {report.get('title') or '未命名报告'}")
+    lines.append("")
+    lines.append(f"- **关键词**：{report.get('keyword') or '-'}")
+    time_range = report.get("time_range") or {}
+    lines.append(f"- **时间范围**：{time_range.get('start', '-')} ~ {time_range.get('end', '-')}")
+    lines.append(f"- **来源**：{'、'.join(report.get('sources') or []) or '-'}")
+    lines.append(f"- **条目数**：{report.get('items_count') or 0}")
+    lines.append("")
+    lines.append("## 趋势分析")
+    lines.append(report.get("analysis") or "暂无分析内容")
+    lines.append("")
+    lines.append("## 关键条目")
+    items = report.get("items") or []
+    if not items:
+        lines.append("- 暂无条目")
+    else:
+        for item in items[:12]:
+            lines.append(f"- **{item.get('title') or '未命名'}**（{item.get('source') or '-'}）")
+            lines.append(f"  - 发布时间：{item.get('published_at') or '-'}")
+            if item.get("price") is not None:
+                lines.append(f"  - 价格：{item.get('price')} {item.get('currency') or ''}".rstrip())
+            if item.get("summary"):
+                lines.append(f"  - 摘要：{item.get('summary')}")
+            if item.get("url"):
+                lines.append(f"  - 链接：[查看原文]({item.get('url')})")
+    return "\n".join(lines)
 
 
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
@@ -423,7 +537,60 @@ def get_report_detail(ingest_id: str) -> dict:
     target = _rendered_root() / f"{ingest_id}.json"
     if not target.exists():
         raise HTTPException(status_code=404, detail="Report not found")
-    return json.loads(target.read_text(encoding="utf-8"))
+    payload = json.loads(target.read_text(encoding="utf-8"))
+    payload["report_markdown"] = _report_to_markdown(payload)
+    return payload
+
+
+@app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")
+def bulk_delete_reports(request: BulkDeleteRequest) -> dict:
+    return _report_mgmt().delete_reports(request.ingest_ids)
+
+
+def _coming_soon_page(title: str) -> HTMLResponse:
+    return HTMLResponse(
+        f"""
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{title}</title>
+  <style>
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background:#f6f8fb; color:#1f2937; }}
+    .wrap {{ width:min(960px,100% - 28px); margin:60px auto; }}
+    .box {{ background:#fff; border:1px solid #d8dee8; padding:24px; }}
+    h1 {{ margin:0 0 10px; color:#0b4fa3; }}
+    a {{ color:#164b91; text-decoration:none; }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="box">
+      <h1>{title}</h1>
+      <p>该页面正在开发中，敬请期待。</p>
+      <p><a href="/">返回新闻动态首页</a></p>
+    </div>
+  </div>
+</body>
+</html>
+"""
+    )
+
+
+@app.get("/topic-analysis", summary="专题分析页面")
+def topic_analysis_page() -> HTMLResponse:
+    return _coming_soon_page("专题分析")
+
+
+@app.get("/price-trend", summary="价格趋势页面")
+def price_trend_page() -> HTMLResponse:
+    return _coming_soon_page("价格趋势")
+
+
+@app.get("/keyword-tracking", summary="关键词追踪页面")
+def keyword_tracking_page() -> HTMLResponse:
+    return _coming_soon_page("关键词追踪")
 
 
 @app.get("/healthz", summary="健康检查", description="用于检测服务是否存活。")

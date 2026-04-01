@@ -30,149 +30,208 @@ def index() -> HTMLResponse:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenClaw 新闻报告</title>
+  <title>OpenClaw 新闻报告门户</title>
   <style>
     :root {
-      --bg: #f4f7fb;
-      --card: #ffffff;
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
       --text: #1f2937;
       --muted: #6b7280;
-      --brand: #2563eb;
-      --brand-soft: #dbeafe;
-      --border: #e5e7eb;
-      --shadow: 0 10px 30px rgba(37, 99, 235, 0.10);
+      --line: #d8dee8;
+      --brand: #0b4fa3;
+      --link: #164b91;
+      --header: #0a2f66;
+      --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218;
+      --surface: #171c25;
+      --surface-2: #202735;
+      --text: #e6edf7;
+      --muted: #9fb0c9;
+      --line: #2c3444;
+      --brand: #66a3ff;
+      --link: #8eb8ff;
+      --header: #101624;
+      --header-text: #f3f6fd;
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
       color: var(--text);
-      background: radial-gradient(circle at 0% 0%, #e7f0ff 0, transparent 30%), var(--bg);
+      background: var(--bg);
     }
-    .wrap { max-width: 1160px; margin: 0 auto; padding: 28px 20px 40px; }
-    .hero {
-      background: linear-gradient(135deg, #1d4ed8, #2563eb 55%, #3b82f6);
-      color: #fff;
-      border-radius: 18px;
-      padding: 24px;
-      box-shadow: var(--shadow);
-      margin-bottom: 18px;
+    .topbar {
+      background: var(--header);
+      color: var(--header-text);
+      border-bottom: 1px solid rgba(255,255,255,0.15);
     }
-    .hero h1 { margin: 0 0 10px; font-size: 30px; }
-    .hero p { margin: 0; opacity: .95; }
-    .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    .wrap { width: min(1200px, 100% - 28px); margin: 0 auto; }
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+    }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+    .top-actions { display: flex; gap: 8px; }
+    .top-actions button {
+      border: 1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.08);
+      color: var(--header-text);
+      padding: 6px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 14px;
+    }
+    .nav ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .nav li {
+      padding: 12px 0;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+    }
+    .nav li.active { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+    .page {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 18px;
+      padding-bottom: 20px;
+    }
+    .left, .right {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 0;
+    }
+    .panel-title {
+      margin: 0;
+      font-size: 18px;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      background: var(--surface-2);
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+    }
     .toolbar input {
-      background: #ffffff;
-      border: 1px solid rgba(255,255,255,.45);
-      border-radius: 10px;
-      padding: 10px 12px;
-      min-width: 260px;
+      flex: 1;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      padding: 7px 10px;
       outline: none;
     }
     .toolbar button {
-      border: 0;
-      background: #0f172a;
-      color: #fff;
-      border-radius: 10px;
-      padding: 10px 14px;
-      cursor: pointer;
-      transition: transform .12s ease, opacity .12s ease;
-    }
-    .toolbar button:hover { transform: translateY(-1px); opacity: .96; }
-    .toolbar button.secondary { background: rgba(255,255,255,.2); border: 1px solid rgba(255,255,255,.35); }
-    .grid { display: grid; grid-template-columns: 1.05fr 1.2fr; gap: 16px; }
-    .card {
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
-      min-height: 420px;
-    }
-    .section-title { margin: 0 0 12px; font-size: 20px; }
-    .muted { color: var(--muted); font-size: 14px; }
-    #report-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-    .report-item {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      background: #fff;
-      transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 7px 10px;
       cursor: pointer;
     }
-    .report-item:hover {
-      border-color: #93c5fd;
-      box-shadow: 0 8px 20px rgba(59, 130, 246, .12);
-      transform: translateY(-1px);
-    }
-    .report-item.active { background: var(--brand-soft); border-color: #60a5fa; }
-    .report-title { font-weight: 600; line-height: 1.4; margin-bottom: 4px; }
-    .badge {
-      display: inline-block;
-      background: #eff6ff;
-      color: #1e40af;
-      border: 1px solid #bfdbfe;
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 12px;
-      margin-right: 6px;
-    }
-    .detail-header { margin-bottom: 10px; }
-    .detail-title { margin: 0 0 6px; font-size: 22px; line-height: 1.35; }
-    .meta-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-    .meta-chip {
-      background: #f8fafc;
-      border: 1px solid var(--border);
-      border-radius: 999px;
-      padding: 5px 10px;
-      font-size: 12px;
-      color: #334155;
-    }
-    .analysis {
-      background: #f8fafc;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 12px;
-      line-height: 1.7;
-      margin: 0 0 12px;
-    }
-    pre {
-      white-space: pre-wrap;
-      background: #0b1020;
-      color: #dbeafe;
-      border-radius: 10px;
-      padding: 12px;
-      max-height: 280px;
-      overflow: auto;
+    #report-list {
+      list-style: none;
       margin: 0;
+      padding: 0;
+      max-height: calc(100vh - 245px);
+      overflow: auto;
+    }
+    .report-item {
+      padding: 12px 14px;
+      border-bottom: 1px dashed var(--line);
+      cursor: pointer;
+      background: var(--surface);
+    }
+    .report-item:hover { background: var(--surface-2); }
+    .report-item.active { border-left: 3px solid var(--brand); background: var(--surface-2); }
+    .report-title { font-size: 15px; line-height: 1.45; margin-bottom: 4px; }
+    .report-meta { color: var(--muted); font-size: 12px; }
+    .detail-wrap { padding: 16px 18px 28px; line-height: 1.75; }
+    .detail-wrap h1, .detail-wrap h2, .detail-wrap h3 { line-height: 1.4; margin: 1.1em 0 .5em; color: var(--brand); }
+    .detail-wrap p { margin: .6em 0; }
+    .detail-wrap ul { padding-left: 20px; }
+    .detail-wrap code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+      padding: 1px 4px;
+    }
+    .detail-wrap pre {
+      background: #0d1422;
+      color: #dce7ff;
+      padding: 12px;
+      overflow: auto;
+    }
+    .muted { color: var(--muted); }
+    a { color: var(--link); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .status-line { font-size: 13px; color: var(--muted); margin-top: 6px; }
+    .empty { padding: 14px; color: var(--muted); }
+    .footer-note {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      padding: 0 2px;
     }
     @media (max-width: 920px) {
-      .grid { grid-template-columns: 1fr; }
-      .card { min-height: auto; }
+      .page { grid-template-columns: 1fr; }
+      #report-list { max-height: 340px; }
     }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="hero">
-      <h1>OpenClaw 新闻报告中心</h1>
-      <p>面向业务用户查看关键词趋势分析结果，支持即时刷新与详情浏览。</p>
-      <div class="toolbar">
-        <input id="keyword-search" placeholder="输入关键词筛选（如：羽毛球）" />
-        <button onclick="loadReports()">刷新报告</button>
-        <button class="secondary" onclick="location.href='/docs'">接口文档</button>
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="top-actions">
+        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
-    <div class="grid">
-      <div class="card">
-        <h2 class="section-title">报告列表</h2>
+  </div>
+  <div class="nav">
+    <div class="wrap">
+      <ul id="category-nav">
+        <li class="active">新闻动态</li>
+        <li>专题分析</li>
+        <li>价格趋势</li>
+        <li>关键词追踪</li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="page">
+      <div class="left">
+        <h2 class="panel-title">报告栏目</h2>
+        <div class="toolbar">
+          <input id="keyword-search" placeholder="输入关键词筛选" />
+          <button onclick="loadReports()">刷新</button>
+        </div>
+        <div class="status-line" id="report-count" style="padding: 0 14px;">加载中...</div>
         <ul id="report-list"></ul>
       </div>
-      <div class="card">
-        <h2 class="section-title">报告详情</h2>
-        <div id="report-detail" class="muted">请先从左侧选择一个报告。</div>
+      <div class="right">
+        <h2 class="panel-title">内容详情</h2>
+        <div id="report-detail" class="detail-wrap muted">请先从左侧选择一个报告。</div>
       </div>
     </div>
+    <div class="footer-note">注：详情内容支持 Markdown 渲染，适合直接展示分析结论。</div>
   </div>
   <script>
     let reportCache = [];
@@ -187,11 +246,98 @@ def index() -> HTMLResponse:
         .replaceAll("'", '&#039;');
     }
 
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+    }
+
+    function setupDarkMode() {
+      if (localStorage.getItem('oc_dark') === '1') {
+        document.body.classList.add('dark');
+      }
+    }
+
+    function markdownToHtml(md) {
+      const src = (md || '').replace(/\r/g, '');
+      const lines = src.split('\n');
+      let html = '';
+      let inList = false;
+      let inCode = false;
+      for (let line of lines) {
+        if (line.startsWith('```')) {
+          if (!inCode) {
+            inCode = true;
+            html += '<pre><code>';
+          } else {
+            inCode = false;
+            html += '</code></pre>';
+          }
+          continue;
+        }
+        if (inCode) {
+          html += escapeHtml(line) + '\n';
+          continue;
+        }
+        if (/^###\\s+/.test(line)) { if (inList) { html += '</ul>'; inList = false; } html += `<h3>${escapeHtml(line.replace(/^###\\s+/, ''))}</h3>`; continue; }
+        if (/^##\\s+/.test(line)) { if (inList) { html += '</ul>'; inList = false; } html += `<h2>${escapeHtml(line.replace(/^##\\s+/, ''))}</h2>`; continue; }
+        if (/^#\\s+/.test(line)) { if (inList) { html += '</ul>'; inList = false; } html += `<h1>${escapeHtml(line.replace(/^#\\s+/, ''))}</h1>`; continue; }
+        if (/^[-*]\\s+/.test(line)) {
+          if (!inList) { html += '<ul>'; inList = true; }
+          const text = line.replace(/^[-*]\\s+/, '');
+          html += `<li>${inlineFormat(text)}</li>`;
+          continue;
+        }
+        if (inList) { html += '</ul>'; inList = false; }
+        if (!line.trim()) { html += '<p></p>'; continue; }
+        html += `<p>${inlineFormat(line)}</p>`;
+      }
+      if (inList) html += '</ul>';
+      if (inCode) html += '</code></pre>';
+      return html;
+    }
+
+    function inlineFormat(text) {
+      let s = escapeHtml(text);
+      s = s.replace(/\\*\\*(.+?)\\*\\*/g, '<strong>$1</strong>');
+      s = s.replace(/\\*(.+?)\\*/g, '<em>$1</em>');
+      s = s.replace(/`(.+?)`/g, '<code>$1</code>');
+      s = s.replace(/\\[(.+?)\\]\\((https?:\\/\\/[^\\s)]+)\\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      return s;
+    }
+
+    function reportToMarkdown(r) {
+      const lines = [];
+      lines.push(`# ${r.title || '未命名报告'}`);
+      lines.push('');
+      lines.push(`- **关键词**：${r.keyword || '-'}`);
+      lines.push(`- **时间范围**：${r.time_range?.start || '-'} ~ ${r.time_range?.end || '-'}`);
+      lines.push(`- **来源**：${(r.sources || []).join('、') || '-'}`);
+      lines.push(`- **条目数**：${r.items_count || 0}`);
+      lines.push('');
+      lines.push('## 趋势分析');
+      lines.push(r.analysis || '暂无分析内容');
+      lines.push('');
+      lines.push('## 关键条目');
+      if (!r.items || !r.items.length) {
+        lines.push('- 暂无条目');
+      } else {
+        for (const item of r.items.slice(0, 12)) {
+          lines.push(`- **${item.title || '未命名'}**（${item.source || '-'}）`);
+          lines.push(`  - 发布时间：${item.published_at || '-'}`);
+          if (item.price !== undefined && item.price !== null) lines.push(`  - 价格：${item.price} ${item.currency || ''}`.trim());
+          if (item.summary) lines.push(`  - 摘要：${item.summary}`);
+          if (item.url) lines.push(`  - 链接：[查看原文](${item.url})`);
+        }
+      }
+      return lines.join('\\n');
+    }
+
     function renderReportList(data) {
       const list = document.getElementById('report-list');
       list.innerHTML = '';
+      document.getElementById('report-count').textContent = `共 ${data.length} 条报告`;
       if (!data.length) {
-        list.innerHTML = '<li class="muted">暂无报告，请先让 OpenClaw 提交报告。</li>';
+        list.innerHTML = '<li class="empty">暂无报告，请先让 OpenClaw 提交报告。</li>';
         return;
       }
       for (const r of data) {
@@ -200,10 +346,8 @@ def index() -> HTMLResponse:
         li.onclick = async () => { await loadDetail(r.ingest_id); };
         li.innerHTML = `
           <div class="report-title">${escapeHtml(r.title || '未命名报告')}</div>
-          <div>
-            <span class="badge">${escapeHtml(r.keyword || '未分类')}</span>
-            <span class="muted">生成时间：${escapeHtml(r.generated_at || '-')}</span>
-          </div>
+          <div class="report-meta">关键词：${escapeHtml(r.keyword || '-')}</div>
+          <div class="report-meta">时间：${escapeHtml(r.generated_at || '-')}</div>
         `;
         list.appendChild(li);
       }
@@ -231,27 +375,15 @@ def index() -> HTMLResponse:
       const r = await res.json();
       activeIngestId = ingestId;
       renderReportList(getFilteredReports());
-      document.getElementById('report-detail').innerHTML = `
-        <div class="detail-header">
-          <h3 class="detail-title">${escapeHtml(r.title || '未命名报告')}</h3>
-          <div class="meta-row">
-            <span class="meta-chip">关键词：${escapeHtml(r.keyword || '-')}</span>
-            <span class="meta-chip">条目数：${escapeHtml(r.items_count || 0)}</span>
-            <span class="meta-chip">生成时间：${escapeHtml(r.generated_at || '-')}</span>
-          </div>
-          <div class="muted">时间范围：${escapeHtml(r.time_range?.start || '-')} ~ ${escapeHtml(r.time_range?.end || '-')}</div>
-          <div class="muted">来源：${escapeHtml((r.sources || []).join(', ') || '-')}</div>
-        </div>
-        <p class="analysis">${escapeHtml(r.analysis || '暂无分析内容')}</p>
-        <h4>结构化条目 JSON</h4>
-        <pre>${escapeHtml(JSON.stringify(r.items || [], null, 2))}</pre>
-      `;
+      const md = reportToMarkdown(r);
+      document.getElementById('report-detail').innerHTML = markdownToHtml(md);
     }
 
     document.getElementById('keyword-search').addEventListener('input', () => {
       renderReportList(getFilteredReports());
     });
 
+    setupDarkMode();
     loadReports();
   </script>
 </body>

@@ -1,0 +1,26 @@
+{
+  "ingest_id": "9da84fb3-7f07-4453-919a-521c8531fac5",
+  "title": "t",
+  "keyword": "羽毛球",
+  "time_range": {
+    "start": "2026-03-01T00:00:00+00:00",
+    "end": "2026-04-01T00:00:00+00:00"
+  },
+  "analysis": "a",
+  "sources": [
+    "source-a"
+  ],
+  "items_count": 1,
+  "items": [
+    {
+      "title": "x",
+      "source": "source-a",
+      "url": "https://example.com/1",
+      "published_at": "2026-03-20T10:00:00Z",
+      "price": 88.0,
+      "currency": "CNY",
+      "summary": "s"
+    }
+  ],
+  "generated_at": "2026-04-01T11:00:00+00:00"
+}

@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: openclaw-news-publisher
+Version: 0.1.0
+Summary: OpenClaw news intake and publish service
+Requires-Python: >=3.11
+Requires-Dist: fastapi
+Requires-Dist: pydantic-settings
+Requires-Dist: uvicorn
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"
+Requires-Dist: httpx; extra == "dev"

@@ -8,20 +8,29 @@ from app.services.publish_service import PublishService
 from app.services.report_service import ReportService
 from app.workers.job_runner import JobRunner
 
-router = APIRouter(prefix="/openclaw", tags=["openclaw"])
+router = APIRouter(
+    prefix="/openclaw",
+    tags=["OpenClaw 接入"],
+)
 
 repo = InMemoryIngestRepository()
 job_runner = JobRunner(repo=repo, report_service=ReportService(), publish_service=PublishService())
 intake_service = IntakeService(repo=repo, job_runner=job_runner)
 
 
-@router.post("/reports", response_model=IngestAccepted, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/reports",
+    response_model=IngestAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="上报 OpenClaw 报告",
+    description="接收 OpenClaw 发送的结构化报告 JSON，校验后入队异步处理。",
+)
 async def create_report_ingest(
     request: Request,
     report: OpenClawReportIn,
     background_tasks: BackgroundTasks,
-    x_request_id: str | None = Header(default=None),
-    x_signature: str | None = Header(default=None),
+    x_request_id: str | None = Header(default=None, description="请求幂等键，请求重试时保持一致。"),
+    x_signature: str | None = Header(default=None, description="可选签名；开启签名校验时必填。"),
     _: None = Depends(verify_api_key),
 ) -> IngestAccepted:
     verify_optional_signature(await request.body(), x_signature)
@@ -33,7 +42,12 @@ async def create_report_ingest(
     return IngestAccepted(ingest_id=ingest_id, status=ingest_status)
 
 
-@router.get("/reports/{ingest_id}", response_model=IngestStatusResponse)
+@router.get(
+    "/reports/{ingest_id}",
+    response_model=IngestStatusResponse,
+    summary="查询处理状态",
+    description="根据 ingest_id 查询任务状态与产物路径。",
+)
 def get_ingest_status(
     ingest_id: str,
     _: None = Depends(verify_api_key),
@@ -52,7 +66,13 @@ def get_ingest_status(
     )
 
 
-@router.post("/reports/{ingest_id}/retry", response_model=IngestAccepted, status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/reports/{ingest_id}/retry",
+    response_model=IngestAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="重试失败任务（预留）",
+    description="仅允许对失败任务发起重试。当前为预留接口。",
+)
 def retry_ingest(
     ingest_id: str,
     background_tasks: BackgroundTasks,

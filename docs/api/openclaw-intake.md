@@ -1,16 +1,16 @@
-# OpenClaw Intake API
+# OpenClaw 接入接口文档
 
-## Endpoint
+## 接口地址
 
 - `POST /api/v1/openclaw/reports`
 
-## Headers
+## 请求头
 
-- `X-Api-Key` (required)
-- `X-Request-Id` (required, idempotency key component)
-- `X-Signature` (optional; required only when signature verification is enabled)
+- `X-Api-Key`（必填）
+- `X-Request-Id`（必填，用于幂等键）
+- `X-Signature`（可选；仅在开启签名校验时必填）
 
-## Request Body (JSON)
+## 请求体（JSON）
 
 ```json
 {
@@ -23,7 +23,7 @@
   "sources": ["source-a", "source-b"],
   "items": [
     {
-      "title": "Example title",
+      "title": "示例新闻标题",
       "source": "source-a",
       "url": "https://example.com/1",
       "published_at": "2026-03-20T10:00:00+00:00",
@@ -32,15 +32,15 @@
       "summary": "..."
     }
   ],
-  "analysis": "trend analysis text",
+  "analysis": "趋势分析文本",
   "generated_title": "不同时间段内羽毛球价格变化趋势分析",
   "generated_at": "2026-04-01T11:00:00+00:00"
 }
 ```
 
-## Response
+## 响应
 
-- Success: `202 Accepted`
+- 成功：`202 Accepted`
 
 ```json
 {
@@ -49,7 +49,7 @@
 }
 ```
 
-## Status Query
+## 状态查询
 
 - `GET /api/v1/openclaw/reports/{ingest_id}`
-- Status enum: `queued`, `processing`, `published`, `failed`
+- 状态枚举：`queued`、`processing`、`published`、`failed`

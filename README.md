@@ -15,6 +15,9 @@
   - `POST /api/v1/openclaw/reports`
   - `GET /api/v1/openclaw/reports/{ingest_id}`
   - `POST /api/v1/openclaw/reports/{ingest_id}/retry`（预留）
+- OpenClaw 门户聊天（FastAPI WebSocket）
+  - 首页聊天框：OpenClaw 回复在左侧气泡、用户消息在右侧气泡实时展示
+  - 中转接口：`WS /api/v1/chat/ws`（服务端连接 OpenClaw Gateway，并将流式增量内容按 `200ms` 聚合后推送前端）
 - 用户页面与公开查询 API
   - `/`（新闻动态：首页报告列表 + Markdown 详情）
   - `/topic-analysis`（专题分析：开发中）
@@ -36,6 +39,7 @@
 openclaw_news_publisher/
 ├─ .gitattributes
 ├─ app/
+│  ├─ api/v1/chat.py
 │  ├─ api/v1/openclaw.py
 │  ├─ core/
 │  │  ├─ config.py
@@ -47,6 +51,7 @@ openclaw_news_publisher/
 │  ├─ services/
 │  │  ├─ intake_service.py
 │  │  ├─ report_service.py
+│  │  ├─ openclaw_chat_bridge.py
 │  │  └─ publish_service.py
 │  ├─ workers/job_runner.py
 │  └─ main.py
@@ -71,6 +76,7 @@ openclaw_news_publisher/
 - FastAPI
 - Pydantic v2
 - Pytest
+- websockets（用于后端代理 OpenClaw Gateway 流式聊天事件）
 
 ## 快速开始（本地）
 
@@ -102,6 +108,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `OPENCLAW_OPENCLAW_API_KEY`（默认 `dev-openclaw-key`）
 - `OPENCLAW_OPENCLAW_ENABLE_SIGNATURE`（默认 `false`）
 - `OPENCLAW_OPENCLAW_HMAC_SECRET`（默认 `dev-secret`）
+- `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
 - `OPENCLAW_CONTENT_RAW_DIR`（默认 `content/reports/raw`）
 - `OPENCLAW_CONTENT_RENDERED_DIR`（默认 `content/reports/rendered`）
 - `OPENCLAW_GIT_AUTO_PUSH`（默认 `false`）

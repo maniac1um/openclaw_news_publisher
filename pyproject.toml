@@ -8,6 +8,7 @@ dependencies = [
   "pydantic-settings",
   "uvicorn",
   "websockets",
+  "psycopg[binary]",
 ]
 
 [project.optional-dependencies]

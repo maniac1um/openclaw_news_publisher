@@ -7,6 +7,7 @@ Requires-Dist: fastapi
 Requires-Dist: pydantic-settings
 Requires-Dist: uvicorn
 Requires-Dist: websockets
+Requires-Dist: psycopg[binary]
 Provides-Extra: dev
 Requires-Dist: pytest; extra == "dev"
 Requires-Dist: httpx; extra == "dev"

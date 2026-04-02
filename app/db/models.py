@@ -15,5 +15,8 @@ class IngestRecord:
     raw_path: str
     rendered_path: str | None = None
     error: str | None = None
+    keyword: str | None = None
+    generated_title: str | None = None
+    generated_at: datetime | None = None
     created_at: datetime = field(default_factory=now_utc)
     updated_at: datetime = field(default_factory=now_utc)

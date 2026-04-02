@@ -29,6 +29,7 @@
 - 文档与运维
   - `/docs`（Swagger）
   - `/healthz`（健康检查）
+  - `/healthz/db`（数据库连通性检查；未配置数据库时返回 enabled=false）
 - 自动化发布
   - 渲染产物写入 `content/reports/rendered/`
   - 发布脚本 `scripts/publish_site.py` 执行 git add/commit（可选 push）
@@ -77,26 +78,113 @@ openclaw_news_publisher/
 - Pydantic v2
 - Pytest
 - websockets（用于后端代理 OpenClaw Gateway 流式聊天事件）
+- psycopg（用于 PostgreSQL 持久化）
 
 ## 快速开始（本地）
 
-### 1) 安装依赖
+以下示例基于 **Ubuntu 24.04 LTS**，并以 PostgreSQL 作为本地持久化存储。
+
+### 1) 安装系统依赖
 
 ```bash
+sudo apt update
+sudo apt install -y \
+  git curl build-essential \
+  python3 python3-venv python3-pip \
+  postgresql postgresql-contrib
+```
+
+### 2) 准备项目目录
+
+```bash
+git clone https://github.com/maniac1um/openclaw_news_publisher.git
+cd openclaw_news_publisher
+```
+
+> 如果你已经在仓库目录内，可跳过该步骤。
+
+### 3) 创建 Python 虚拟环境并安装 Python 依赖
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 ```
 
-### 2) 启动服务
+### 4) 初始化 PostgreSQL
 
 ```bash
+sudo systemctl enable --now postgresql
+sudo -u postgres psql <<'SQL'
+DO $$
+BEGIN
+   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openclaw_app') THEN
+      CREATE ROLE openclaw_app LOGIN PASSWORD '请替换为强密码';
+   END IF;
+END$$;
+SQL
+```
+
+创建数据库（首次执行）：
+
+```bash
+sudo -u postgres psql -c "CREATE DATABASE openclaw_app OWNER openclaw_app;"
+```
+
+已存在时可忽略报错，或手动检查：
+
+```bash
+sudo -u postgres psql -c "\l openclaw_app"
+```
+
+### 5) 创建 `reports` 表与索引
+
+```bash
+psql "postgresql://openclaw_app:请替换为强密码@127.0.0.1:5432/openclaw_app" <<'SQL'
+CREATE TABLE IF NOT EXISTS reports (
+  id BIGSERIAL PRIMARY KEY,
+  ingest_id UUID NOT NULL UNIQUE,
+  task_id TEXT,
+  keyword TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('queued','processing','published','failed')),
+  generated_title TEXT,
+  generated_at TIMESTAMPTZ,
+  payload_json JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reports_status_created_at ON reports (status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_keyword_created_at ON reports (keyword, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_reports_generated_at ON reports (generated_at DESC);
+SQL
+```
+
+### 6) 配置环境变量（推荐写入 `.env`）
+
+在仓库根目录创建 `.env`（或导出为 shell 环境变量）：
+
+```bash
+cat > .env <<'EOF'
+OPENCLAW_DATABASE_URL=postgresql://openclaw_app:请替换为强密码@127.0.0.1:5432/openclaw_app
+OPENCLAW_OPENCLAW_API_KEY=dev-openclaw-key
+OPENCLAW_OPENCLAW_WS_URL=ws://localhost:18789/ws
+EOF
+```
+
+### 7) 启动服务
+
+```bash
+source .venv/bin/activate
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-### 3) 验证服务
+### 8) 验证服务
 
 - 首页：`http://127.0.0.1:8000/`
 - 文档：`http://127.0.0.1:8000/docs`
 - 健康检查：`http://127.0.0.1:8000/healthz`
+- 数据库检查：`http://127.0.0.1:8000/healthz/db`
 
 在 **Windows 与 Ubuntu** 等多台机器上基于 GitHub 协作开发时，参见 [docs/cross-platform-development.md](docs/cross-platform-development.md)。
 
@@ -109,6 +197,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `OPENCLAW_OPENCLAW_ENABLE_SIGNATURE`（默认 `false`）
 - `OPENCLAW_OPENCLAW_HMAC_SECRET`（默认 `dev-secret`）
 - `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
+- `OPENCLAW_DATABASE_URL`（可选；配置后启用 PostgreSQL 存储）
 - `OPENCLAW_CONTENT_RAW_DIR`（默认 `content/reports/raw`）
 - `OPENCLAW_CONTENT_RENDERED_DIR`（默认 `content/reports/rendered`）
 - `OPENCLAW_GIT_AUTO_PUSH`（默认 `false`）
@@ -162,7 +251,9 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ## 门户端删除接口（可复用）
 
-用于门户端或后续自动清理任务删除报告文件（raw + rendered 同步删除）：
+用于门户端或后续自动清理任务删除报告：
+- 配置了 `OPENCLAW_DATABASE_URL` 时：删除 PostgreSQL 中对应记录；
+- 未配置数据库时：删除 `content/reports/raw/` 与 `content/reports/rendered/` 对应文件。
 
 `POST /api/v1/public/reports/bulk-delete`
 
@@ -251,14 +342,15 @@ pytest -q
 
 3. 用户页面无数据
    - 先确认 `POST /api/v1/openclaw/reports` 成功并且状态到 `published`。
-   - 检查 `content/reports/rendered/` 是否生成 JSON 文件。
+   - 若启用数据库：检查 `GET /healthz/db` 与 `reports` 表是否有对应 `ingest_id`。
+   - 若未启用数据库：检查 `content/reports/rendered/` 是否生成 JSON 文件。
 
 4. 页面显示中文为 `???`
    - 这通常是请求发送端编码问题，建议用 UTF-8 并设置 `Content-Type: application/json; charset=utf-8`。
 
 ## 后续建议
 
-- 将内存仓储替换为数据库（SQLite/PostgreSQL）。
 - 完成 `retry` 接口（从 raw payload 恢复重放）。
 - 增加鉴权签名、防重放与审计日志。
 - 增加前端筛选（按关键词、时间范围、状态）。
+- 增加数据库迁移脚本与连接池配置（生产可观测性/稳定性）。

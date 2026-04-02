@@ -1,18 +1,18 @@
 import json
 import uuid
 from pathlib import Path
+from typing import Any
 
 from fastapi import BackgroundTasks, HTTPException, status
 
 from app.core.config import settings
 from app.db.models import IngestRecord
-from app.db.repositories import InMemoryIngestRepository
 from app.schemas.report import OpenClawReportIn
 from app.workers.job_runner import JobRunner
 
 
 class IntakeService:
-    def __init__(self, repo: InMemoryIngestRepository, job_runner: JobRunner) -> None:
+    def __init__(self, repo: Any, job_runner: JobRunner) -> None:
         self.repo = repo
         self.job_runner = job_runner
         self._raw_root = Path(settings.content_raw_dir)
@@ -41,6 +41,9 @@ class IntakeService:
             task_id=report.task_id,
             status="queued",
             raw_path=raw_path,
+            keyword=report.keyword,
+            generated_title=report.generated_title,
+            generated_at=report.generated_at,
         )
         self.repo.create(record)
         background_tasks.add_task(self.job_runner.process_ingest, ingest_id, report)

@@ -934,6 +934,80 @@ def _report_mgmt() -> ReportManagementService:
     return ReportManagementService(raw_root=_raw_root(), rendered_root=_rendered_root())
 
 
+def _db_enabled() -> bool:
+    return bool(settings.database_url)
+
+
+def _list_reports_from_db() -> list[dict]:
+    import psycopg
+
+    sql = """
+    SELECT ingest_id, payload_json->'rendered_payload' AS rendered_payload, generated_at
+    FROM reports
+    WHERE status = 'published'
+      AND payload_json ? 'rendered_payload'
+    ORDER BY generated_at DESC NULLS LAST, id DESC
+    """
+    out: list[dict] = []
+    with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        for ingest_id, rendered_payload, generated_at in cur.fetchall():
+            payload = rendered_payload or {}
+            out.append(
+                {
+                    "ingest_id": str(ingest_id),
+                    "title": payload.get("title"),
+                    "keyword": payload.get("keyword"),
+                    "generated_at": payload.get("generated_at") or (generated_at.isoformat() if generated_at else None),
+                }
+            )
+    return out
+
+
+def _get_report_detail_from_db(ingest_id: str) -> dict | None:
+    import psycopg
+
+    sql = """
+    SELECT payload_json->'rendered_payload' AS rendered_payload
+    FROM reports
+    WHERE ingest_id = %s::uuid
+      AND status = 'published'
+    LIMIT 1
+    """
+    with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, (ingest_id,))
+        row = cur.fetchone()
+    if not row:
+        return None
+    payload = row[0] or {}
+    if not payload:
+        return None
+    payload["report_markdown"] = _report_to_markdown(payload)
+    return payload
+
+
+def _delete_reports_from_db(ingest_ids: list[str]) -> dict:
+    import psycopg
+
+    deleted: list[str] = []
+    not_found: list[str] = []
+    sql = "DELETE FROM reports WHERE ingest_id = %s::uuid RETURNING ingest_id"
+    with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+        for ingest_id in ingest_ids:
+            cur.execute(sql, (ingest_id,))
+            row = cur.fetchone()
+            if row:
+                deleted.append(str(row[0]))
+            else:
+                not_found.append(ingest_id)
+        conn.commit()
+    return {
+        "requested": len(ingest_ids),
+        "deleted": deleted,
+        "not_found": not_found,
+    }
+
+
 def _report_to_markdown(report: dict) -> str:
     lines: list[str] = []
     lines.append(f"# {report.get('title') or '未命名报告'}")
@@ -966,6 +1040,9 @@ def _report_to_markdown(report: dict) -> str:
 
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
 def list_reports() -> list[dict]:
+    if _db_enabled():
+        return _list_reports_from_db()
+
     root = _rendered_root()
     if not root.exists():
         return []
@@ -988,6 +1065,12 @@ def list_reports() -> list[dict]:
 
 @app.get("/api/v1/public/reports/{ingest_id}", summary="用户侧报告详情")
 def get_report_detail(ingest_id: str) -> dict:
+    if _db_enabled():
+        payload = _get_report_detail_from_db(ingest_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return payload
+
     target = _rendered_root() / f"{ingest_id}.json"
     if not target.exists():
         raise HTTPException(status_code=404, detail="Report not found")
@@ -998,6 +1081,8 @@ def get_report_detail(ingest_id: str) -> dict:
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")
 def bulk_delete_reports(request: BulkDeleteRequest) -> dict:
+    if _db_enabled():
+        return _delete_reports_from_db(request.ingest_ids)
     return _report_mgmt().delete_reports(request.ingest_ids)
 
 
@@ -1179,3 +1264,18 @@ def keyword_tracking_page() -> HTMLResponse:
 @app.get("/healthz", summary="健康检查", description="用于检测服务是否存活。")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/healthz/db", summary="数据库健康检查", description="用于检测 PostgreSQL 连通性。")
+def healthz_db() -> dict:
+    if not settings.database_url:
+        return {"ok": False, "enabled": False, "detail": "database_url is not configured"}
+    try:
+        import psycopg
+
+        with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return {"ok": True, "enabled": True}
+    except Exception as exc:
+        return {"ok": False, "enabled": True, "detail": str(exc)}

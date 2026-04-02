@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     git_auto_push: bool = Field(default=False)
     git_remote: str = Field(default="origin")
     git_branch: str = Field(default="main")
+    # Optional PostgreSQL DSN, for example:
+    # postgresql://openclaw_app:password@127.0.0.1:5432/openclaw_app
+    database_url: str | None = Field(default=None)
     # OpenClaw Gateway WebSocket endpoint.
     # It is used by the chat proxy in `app/api/v1/chat.py`.
     openclaw_ws_url: str = Field(default="ws://localhost:18789/ws")

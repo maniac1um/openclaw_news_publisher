@@ -1,7 +1,8 @@
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
 
+from app.core.config import settings
 from app.core.security import verify_api_key, verify_optional_signature
-from app.db.repositories import InMemoryIngestRepository
+from app.db.repositories import InMemoryIngestRepository, PostgresIngestRepository
 from app.schemas.report import IngestAccepted, IngestStatusResponse, OpenClawReportIn
 from app.services.intake_service import IntakeService
 from app.services.publish_service import PublishService
@@ -13,7 +14,7 @@ router = APIRouter(
     tags=["OpenClaw 接入"],
 )
 
-repo = InMemoryIngestRepository()
+repo = PostgresIngestRepository(settings.database_url) if settings.database_url else InMemoryIngestRepository()
 job_runner = JobRunner(repo=repo, report_service=ReportService(), publish_service=PublishService())
 intake_service = IntakeService(repo=repo, job_runner=job_runner)
 

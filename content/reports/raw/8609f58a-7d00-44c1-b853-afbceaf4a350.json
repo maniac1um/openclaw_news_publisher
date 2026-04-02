@@ -1,0 +1,25 @@
+{
+  "task_id": "task-db-1775130428",
+  "keyword": "数据库验证",
+  "time_range": {
+    "start": "2026-03-01T00:00:00Z",
+    "end": "2026-04-01T00:00:00Z"
+  },
+  "sources": [
+    "manual"
+  ],
+  "items": [
+    {
+      "title": "测试条目",
+      "source": "manual",
+      "url": "https://example.com/db-test",
+      "published_at": "2026-03-20T10:00:00Z",
+      "price": 12.3,
+      "currency": "CNY",
+      "summary": "数据库接入验证"
+    }
+  ],
+  "analysis": "用于验证 openclaw POST 是否落库",
+  "generated_title": "数据库接入验证报告",
+  "generated_at": "2026-04-02T11:47:08Z"
+}

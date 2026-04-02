@@ -30,6 +30,7 @@ description: Generate keyword-focused news analysis payloads and submit them to 
 - 记录返回的 `ingest_id`
 - 轮询 `GET /api/v1/openclaw/reports/{ingest_id}` 直到结束状态
 - 如需清理历史报告，可调用批量删除接口（见下文）
+- 可选健康检查：`GET /healthz`、`GET /healthz/db`
 
 ## 必填请求头
 
@@ -111,7 +112,8 @@ description: Generate keyword-focused news analysis payloads and submit them to 
 
 行为：
 
-- 同步删除 `content/reports/raw/` 与 `content/reports/rendered/` 对应文件。
+- 当服务启用 `OPENCLAW_DATABASE_URL` 时，删除 PostgreSQL `reports` 表对应记录。
+- 当服务未启用数据库时，同步删除 `content/reports/raw/` 与 `content/reports/rendered/` 对应文件。
 - 返回 `requested/deleted/not_found` 统计信息。
 
 ## 质量约束

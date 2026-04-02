@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     git_auto_push: bool = Field(default=False)
     git_remote: str = Field(default="origin")
     git_branch: str = Field(default="main")
+    # OpenClaw Gateway WebSocket endpoint.
+    # It is used by the chat proxy in `app/api/v1/chat.py`.
+    openclaw_ws_url: str = Field(default="ws://localhost:18789/ws")
 
     model_config = SettingsConfigDict(env_prefix="OPENCLAW_", env_file=".env", extra="ignore")
 

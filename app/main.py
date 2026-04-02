@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app.api.v1.openclaw import router as openclaw_router
+from app.api.v1.chat import router as chat_router
 from app.core.config import settings
 from app.services.report_management_service import ReportManagementService
 
@@ -21,6 +22,7 @@ app = FastAPI(
     version="0.1.0",
 )
 app.include_router(openclaw_router, prefix=settings.api_v1_prefix)
+app.include_router(chat_router, prefix=settings.api_v1_prefix)
 
 
 class BulkDeleteRequest(BaseModel):
@@ -176,6 +178,54 @@ def index(page: str | None = None) -> HTMLResponse:
     }
     .muted { color: var(--muted); }
 
+    .chat-messages {
+      height: 260px;
+      overflow: auto;
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+    }
+    .chat-row {
+      display: flex;
+      width: 100%;
+    }
+    .chat-row.user { justify-content: flex-end; }
+    .chat-row.assistant { justify-content: flex-start; }
+    .bubble {
+      max-width: 86%;
+      padding: 10px 12px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.65;
+    }
+    .bubble.user {
+      background: rgba(11,79,163,0.12);
+      border-color: rgba(11,79,163,0.35);
+    }
+    .bubble.assistant {
+      background: var(--surface-2);
+    }
+    .chat-input-row {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+      align-items: flex-end;
+    }
+    .chat-input-row textarea {
+      min-height: 56px;
+      max-height: 140px;
+    }
+    .send-btn[disabled] {
+      opacity: 0.65;
+      cursor: not-allowed;
+    }
+
     #status-list { list-style: none; padding: 0; margin: 10px 0 0; }
     .status-item {
       padding: 10px 12px;
@@ -250,11 +300,11 @@ def index(page: str | None = None) -> HTMLResponse:
 
     <div class="cards">
       <div class="card">
-        <div class="card-title">向 OpenClaw 发送消息</div>
-        <textarea id="openclaw-input" placeholder="输入你希望 OpenClaw 处理的文本（例如：分析某关键词、时间范围或请求的格式）。"></textarea>
-        <div class="card-actions">
-          <button class="btn primary" id="send-btn">发送</button>
-          <button class="btn" onclick="document.getElementById('openclaw-input').value = '';">清空</button>
+        <div class="card-title">OpenClaw 对话</div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div class="chat-input-row">
+          <textarea id="openclaw-chat-input" placeholder="输入你希望 OpenClaw 处理的自由文本（例如：分析某关键词、时间范围或直接提问）。"></textarea>
+          <button class="btn primary send-btn" id="chat-send-btn">发送</button>
         </div>
       </div>
 
@@ -271,16 +321,6 @@ def index(page: str | None = None) -> HTMLResponse:
     <div style="margin-top:6px;"><a href="mailto:maniac1um@163.com">联系作者</a></div>
   </div>
 
-  <div id="send-modal" class="modal-overlay">
-    <div class="modal">
-      <div class="modal-title">消息已发送</div>
-      <div class="modal-body" id="modal-body"></div>
-      <div class="modal-actions">
-        <button class="btn" onclick="closeModal()">关闭</button>
-      </div>
-    </div>
-  </div>
-
   <script>
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
@@ -291,14 +331,6 @@ def index(page: str | None = None) -> HTMLResponse:
         document.body.classList.add('dark');
       }
     }
-    function openModal(body) {
-      document.getElementById('modal-body').textContent = body;
-      document.getElementById('send-modal').style.display = 'flex';
-    }
-    function closeModal() {
-      document.getElementById('send-modal').style.display = 'none';
-    }
-
     async function loadStatus() {
       const summary = document.getElementById('status-summary');
       const list = document.getElementById('status-list');
@@ -335,19 +367,109 @@ def index(page: str | None = None) -> HTMLResponse:
       }
     }
 
-    document.getElementById('send-btn').addEventListener('click', () => {
-      const input = document.getElementById('openclaw-input').value.trim();
-      if (!input) {
-        openModal('你还没有输入消息。');
-        return;
-      }
-      openModal(`你输入的消息：\n${input}\n\n当前仅演示前端对话框，后端发送接口待实现。`);
+    const chatMessages = document.getElementById('chat-messages');
+    const chatInput = document.getElementById('openclaw-chat-input');
+    const chatSendBtn = document.getElementById('chat-send-btn');
+
+    let chatWs = null;
+    let isStreaming = false;
+    let activeSessionKey = null;
+    let activeAssistantBubble = null;
+
+    function addChatRow(side, text) {
+      const row = document.createElement('div');
+      row.className = `chat-row ${side}`;
+      const bubble = document.createElement('div');
+      bubble.className = `bubble ${side}`;
+      bubble.textContent = text;
+      row.appendChild(bubble);
+      chatMessages.appendChild(row);
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+      return bubble;
+    }
+
+    function genSessionKey() {
+      if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+      return 'session-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    }
+
+    function connectChatWs() {
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = wsProto + '//' + location.host + '/api/v1/chat/ws';
+      chatWs = new WebSocket(wsUrl);
+
+      chatWs.onopen = () => {
+        // Keep connected for this page.
+      };
+
+      chatWs.onmessage = (event) => {
+        let data = null;
+        try {
+          data = JSON.parse(event.data);
+        } catch (e) {
+          return;
+        }
+        if (!data || !data.sessionKey) return;
+        if (data.sessionKey !== activeSessionKey) return;
+
+        if (data.type === 'assistant_delta') {
+          const text = data.text ?? '';
+          if (activeAssistantBubble) activeAssistantBubble.textContent = text;
+          if (data.done) {
+            isStreaming = false;
+            activeSessionKey = null;
+            activeAssistantBubble = null;
+            chatSendBtn.disabled = false;
+            chatInput.disabled = false;
+            chatInput.focus();
+          }
+        } else if (data.type === 'assistant_error') {
+          if (activeAssistantBubble) activeAssistantBubble.textContent = `回复失败：${data.error || '未知错误'}`;
+          isStreaming = false;
+          activeSessionKey = null;
+          activeAssistantBubble = null;
+          chatSendBtn.disabled = false;
+          chatInput.disabled = false;
+        }
+      };
+
+      chatWs.onerror = () => {
+        // Non-fatal: the send button will fail if WS can't connect.
+      };
+    }
+
+    chatSendBtn.addEventListener('click', () => {
+      const input = chatInput.value.trim();
+      if (!input) return;
+      if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
+      if (isStreaming) return;
+
+      isStreaming = true;
+      chatSendBtn.disabled = true;
+      chatInput.disabled = true;
+
+      const sessionKey = genSessionKey();
+      activeSessionKey = sessionKey;
+      addChatRow('user', input);
+      activeAssistantBubble = addChatRow('assistant', 'OpenClaw 正在生成中...');
+
+      chatWs.send(JSON.stringify({
+        type: 'user_message',
+        text: input,
+        sessionKey: sessionKey,
+      }));
+
+      chatInput.value = '';
     });
 
-    // Click outside modal to close.
-    document.getElementById('send-modal').addEventListener('click', (e) => {
-      if (e.target && e.target.id === 'send-modal') closeModal();
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        chatSendBtn.click();
+      }
     });
+
+    connectChatWs();
 
     setupDarkMode();
     loadStatus();

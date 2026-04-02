@@ -1,8 +1,10 @@
+README.md
 pyproject.toml
 app/__init__.py
 app/main.py
 app/api/__init__.py
 app/api/v1/__init__.py
+app/api/v1/chat.py
 app/api/v1/openclaw.py
 app/core/__init__.py
 app/core/config.py
@@ -14,7 +16,9 @@ app/schemas/__init__.py
 app/schemas/report.py
 app/services/__init__.py
 app/services/intake_service.py
+app/services/openclaw_chat_bridge.py
 app/services/publish_service.py
+app/services/report_management_service.py
 app/services/report_service.py
 app/workers/__init__.py
 app/workers/job_runner.py

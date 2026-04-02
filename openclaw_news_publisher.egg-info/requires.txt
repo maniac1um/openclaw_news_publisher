@@ -1,6 +1,7 @@
 fastapi
 pydantic-settings
 uvicorn
+websockets
 
 [dev]
 pytest

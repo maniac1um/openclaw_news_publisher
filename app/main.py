@@ -28,7 +28,335 @@ class BulkDeleteRequest(BaseModel):
 
 
 @app.get("/")
-def index() -> HTMLResponse:
+def index(page: str | None = None) -> HTMLResponse:
+    # `/?page=news` keeps the original "news dashboard" UI reachable.
+    if page != "news":
+        return HTMLResponse(
+            """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw 门户首页</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --brand: #0b4fa3;
+      --link: #164b91;
+      --header: #0a2f66;
+      --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218;
+      --surface: #171c25;
+      --surface-2: #202735;
+      --text: #e6edf7;
+      --muted: #9fb0c9;
+      --line: #2c3444;
+      --brand: #66a3ff;
+      --link: #8eb8ff;
+      --header: #101624;
+      --header-text: #f3f6fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+    .topbar {
+      background: var(--header);
+      color: var(--header-text);
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+    }
+    .wrap { width: min(1200px, 100% - 28px); margin: 0 auto; }
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+    }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+    .top-actions { display: flex; gap: 10px; align-items: center; }
+    .top-actions button {
+      border: 1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.08);
+      color: var(--header-text);
+      padding: 7px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+
+    .nav {
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 14px;
+    }
+    .nav ul {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    .nav li, .nav a {
+      padding: 12px 0;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      color: inherit;
+      display: inline-block;
+      text-decoration: none;
+    }
+    .nav li.active { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
+    .portal-hero { padding: 22px 0 14px; }
+    .portal-hero h1 { margin: 0 0 8px; font-size: 22px; color: var(--brand); }
+    .portal-hero p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
+
+    .cards {
+      display: grid;
+      grid-template-columns: 1.05fr 1fr;
+      gap: 14px;
+      align-items: start;
+      padding-bottom: 26px;
+    }
+    @media (max-width: 920px) {
+      .cards { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px 16px 14px;
+    }
+    .card-title {
+      margin: 0 0 10px;
+      font-size: 16px;
+      color: var(--brand);
+      font-weight: 700;
+    }
+    textarea {
+      width: 100%;
+      min-height: 110px;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+      resize: vertical;
+      font-family: inherit;
+      line-height: 1.6;
+    }
+    .card-actions { display: flex; gap: 10px; margin-top: 10px; }
+    .btn {
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
+      padding: 10px 14px;
+      border-radius: 14px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .btn.primary {
+      border-color: rgba(11,79,163,0.35);
+      background: rgba(11,79,163,0.10);
+      color: var(--brand);
+    }
+    .muted { color: var(--muted); }
+
+    #status-list { list-style: none; padding: 0; margin: 10px 0 0; }
+    .status-item {
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      margin-bottom: 10px;
+      background: var(--surface);
+    }
+    .status-item-title { font-weight: 650; margin-bottom: 4px; font-size: 14px; }
+    .status-item-meta { color: var(--muted); font-size: 12px; }
+
+    .portal-footer {
+      padding: 18px 0 36px;
+      color: var(--muted);
+      font-size: 13px;
+      text-align: center;
+    }
+    .portal-footer a { color: var(--link); text-decoration: none; }
+    .portal-footer a:hover { text-decoration: underline; }
+
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 1000;
+    }
+    .modal {
+      width: min(560px, 100%);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px 16px 14px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.35);
+    }
+    .modal-title { font-weight: 800; color: var(--brand); margin: 0 0 8px; }
+    .modal-body { color: var(--text); white-space: pre-wrap; line-height: 1.6; }
+    .modal-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="top-actions">
+        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button onclick="location.href='/docs'">接口文档</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="nav">
+    <div class="wrap">
+      <ul id="category-nav">
+        <li class="active"><a href="/">门户首页</a></li>
+        <li><a href="/?page=news">新闻动态</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
+        <li><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/keyword-tracking">关键词追踪</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="portal-hero">
+      <h1>OpenClaw 门户首页</h1>
+      <p>选择一个模块进入页面；也可以在下方向 OpenClaw 发送消息（当前仅做前端演示，对后端未实现）。</p>
+    </div>
+
+    <div class="cards">
+      <div class="card">
+        <div class="card-title">向 OpenClaw 发送消息</div>
+        <textarea id="openclaw-input" placeholder="输入你希望 OpenClaw 处理的文本（例如：分析某关键词、时间范围或请求的格式）。"></textarea>
+        <div class="card-actions">
+          <button class="btn primary" id="send-btn">发送</button>
+          <button class="btn" onclick="document.getElementById('openclaw-input').value = '';">清空</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">OpenClaw 工作情况</div>
+        <div class="muted" id="status-summary">加载中...</div>
+        <ul id="status-list"></ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="portal-footer">
+    <div>作者：maniac1um</div>
+    <div style="margin-top:6px;"><a href="mailto:maniac1um@163.com">联系作者</a></div>
+  </div>
+
+  <div id="send-modal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-title">消息已发送</div>
+      <div class="modal-body" id="modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn" onclick="closeModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+    }
+    function setupDarkMode() {
+      if (localStorage.getItem('oc_dark') === '1') {
+        document.body.classList.add('dark');
+      }
+    }
+    function openModal(body) {
+      document.getElementById('modal-body').textContent = body;
+      document.getElementById('send-modal').style.display = 'flex';
+    }
+    function closeModal() {
+      document.getElementById('send-modal').style.display = 'none';
+    }
+
+    async function loadStatus() {
+      const summary = document.getElementById('status-summary');
+      const list = document.getElementById('status-list');
+      summary.textContent = '加载中...';
+      list.innerHTML = '';
+      try {
+        const res = await fetch('/api/v1/public/reports');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const arr = Array.isArray(data) ? data : [];
+        summary.textContent = `当前已发布报告：${arr.length} 条`;
+        const top = arr.slice(0, 4);
+        if (!top.length) {
+          const li = document.createElement('li');
+          li.className = 'status-item';
+          li.innerHTML = `<div class="status-item-title">暂无报告</div><div class="status-item-meta">等待 OpenClaw 提交分析结果...</div>`;
+          list.appendChild(li);
+          return;
+        }
+        for (const r of top) {
+          const li = document.createElement('li');
+          li.className = 'status-item';
+          const title = r.title || '未命名报告';
+          const meta = r.generated_at || '-';
+          li.innerHTML = `<div class="status-item-title">${title}</div><div class="status-item-meta">生成时间：${meta}</div>`;
+          list.appendChild(li);
+        }
+      } catch (err) {
+        summary.textContent = '加载失败';
+        const li = document.createElement('li');
+        li.className = 'status-item';
+        li.innerHTML = `<div class="status-item-title">无法获取工作情况</div><div class="status-item-meta">${err?.message || '未知错误'}</div>`;
+        list.appendChild(li);
+      }
+    }
+
+    document.getElementById('send-btn').addEventListener('click', () => {
+      const input = document.getElementById('openclaw-input').value.trim();
+      if (!input) {
+        openModal('你还没有输入消息。');
+        return;
+      }
+      openModal(`你输入的消息：\n${input}\n\n当前仅演示前端对话框，后端发送接口待实现。`);
+    });
+
+    // Click outside modal to close.
+    document.getElementById('send-modal').addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'send-modal') closeModal();
+    });
+
+    setupDarkMode();
+    loadStatus();
+  </script>
+</body>
+</html>
+"""
+        )
+
     return HTMLResponse(
         """
 <!doctype html>
@@ -87,9 +415,10 @@ def index() -> HTMLResponse:
       border: 1px solid rgba(255,255,255,.35);
       background: rgba(255,255,255,.08);
       color: var(--header-text);
-      padding: 6px 10px;
-      border-radius: 4px;
+      padding: 7px 12px;
+      border-radius: 12px;
       cursor: pointer;
+      font-size: 14px;
     }
     .nav {
       background: var(--surface);
@@ -122,7 +451,7 @@ def index() -> HTMLResponse:
     .left, .right {
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: 0;
+      border-radius: 14px;
     }
     .panel-title {
       margin: 0;
@@ -144,6 +473,7 @@ def index() -> HTMLResponse:
       color: var(--text);
       padding: 7px 10px;
       outline: none;
+      border-radius: 12px;
     }
     .toolbar button {
       border: 1px solid var(--line);
@@ -151,6 +481,7 @@ def index() -> HTMLResponse:
       color: var(--text);
       padding: 7px 10px;
       cursor: pointer;
+      border-radius: 12px;
     }
     .toolbar button.danger {
       border-color: #b42318;
@@ -225,7 +556,8 @@ def index() -> HTMLResponse:
   <div class="nav">
     <div class="wrap">
       <ul id="category-nav">
-        <li class="active"><a href="/">新闻动态</a></li>
+        <li><a href="/">门户首页</a></li>
+        <li class="active"><a href="/?page=news">新闻动态</a></li>
         <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
         <li><a href="/keyword-tracking">关键词追踪</a></li>
@@ -547,7 +879,7 @@ def bulk_delete_reports(request: BulkDeleteRequest) -> dict:
     return _report_mgmt().delete_reports(request.ingest_ids)
 
 
-def _coming_soon_page(title: str) -> HTMLResponse:
+def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
     return HTMLResponse(
         f"""
 <!doctype html>
@@ -557,21 +889,150 @@ def _coming_soon_page(title: str) -> HTMLResponse:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{title}</title>
   <style>
-    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background:#f6f8fb; color:#1f2937; }}
-    .wrap {{ width:min(960px,100% - 28px); margin:60px auto; }}
-    .box {{ background:#fff; border:1px solid #d8dee8; padding:24px; }}
-    h1 {{ margin:0 0 10px; color:#0b4fa3; }}
-    a {{ color:#164b91; text-decoration:none; }}
+    :root {{
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --brand: #0b4fa3;
+      --link: #164b91;
+      --header: #0a2f66;
+      --header-text: #ffffff;
+    }}
+    body.dark {{
+      --bg: #0f1218;
+      --surface: #171c25;
+      --surface-2: #202735;
+      --text: #e6edf7;
+      --muted: #9fb0c9;
+      --line: #2c3444;
+      --brand: #66a3ff;
+      --link: #8eb8ff;
+      --header: #101624;
+      --header-text: #f3f6fd;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }}
+    .topbar {{
+      background: var(--header);
+      color: var(--header-text);
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+    }}
+    .wrap {{ width:min(1200px,100% - 28px); margin: 0 auto; }}
+    .topbar-inner {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 0;
+    }}
+    .logo {{ font-size: 20px; font-weight: 700; letter-spacing: .5px; }}
+    .top-actions {{ display: flex; gap: 10px; align-items: center; }}
+    .top-actions button {{
+      border: 1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.08);
+      color: var(--header-text);
+      padding: 7px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }}
+    .nav {{
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 14px;
+    }}
+    .nav ul {{
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      gap: 18px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }}
+    .nav li, .nav a {{
+      padding: 12px 0;
+      border-bottom: 2px solid transparent;
+      cursor: pointer;
+      color: inherit;
+      display: inline-block;
+      text-decoration: none;
+    }}
+    .nav li.active {{ border-color: var(--brand); color: var(--brand); font-weight: 600; }}
+
+    .content-wrap {{ width:min(960px,100% - 28px); margin: 18px auto 0; }}
+    .box {{
+      background: var(--surface);
+      border: 1px solid var(--line);
+      padding: 24px;
+      border-radius: 16px;
+    }}
+    h1 {{ margin:0 0 10px; color: var(--brand); }}
+    p {{ margin: 0; }}
+    .muted {{ color: var(--muted); margin-top: 8px; }}
+    .btn-link {{
+      display: inline-block;
+      margin-top: 16px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--text);
+      border-radius: 14px;
+      text-decoration: none;
+      font-weight: 650;
+    }}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="box">
-      <h1>{title}</h1>
-      <p>该页面正在开发中，敬请期待。</p>
-      <p><a href="/">返回新闻动态首页</a></p>
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="top-actions">
+        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button onclick="location.href='/docs'">接口文档</button>
+      </div>
     </div>
   </div>
+
+  <div class="nav">
+    <div class="wrap">
+      <ul id="category-nav">
+        <li{ ' class="active"' if active_nav_key == "home" else ""}><a href="/">门户首页</a></li>
+        <li{ ' class="active"' if active_nav_key == "news" else ""}><a href="/?page=news">新闻动态</a></li>
+        <li{ ' class="active"' if active_nav_key == "topic" else ""}><a href="/topic-analysis">专题分析</a></li>
+        <li{ ' class="active"' if active_nav_key == "price" else ""}><a href="/price-trend">价格趋势</a></li>
+        <li{ ' class="active"' if active_nav_key == "keyword" else ""}><a href="/keyword-tracking">关键词追踪</a></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="content-wrap">
+    <div class="box">
+      <h1>{title}</h1>
+      <p class="muted">该页面正在开发中，敬请期待。</p>
+      <a class="btn-link" href="/">返回门户首页</a>
+    </div>
+  </div>
+
+  <script>
+    function toggleDarkMode() {{
+      document.body.classList.toggle('dark');
+      localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+    }}
+    function setupDarkMode() {{
+      if (localStorage.getItem('oc_dark') === '1') {{
+        document.body.classList.add('dark');
+      }}
+    }}
+    setupDarkMode();
+  </script>
 </body>
 </html>
 """
@@ -580,17 +1041,17 @@ def _coming_soon_page(title: str) -> HTMLResponse:
 
 @app.get("/topic-analysis", summary="专题分析页面")
 def topic_analysis_page() -> HTMLResponse:
-    return _coming_soon_page("专题分析")
+    return _coming_soon_page("专题分析", active_nav_key="topic")
 
 
 @app.get("/price-trend", summary="价格趋势页面")
 def price_trend_page() -> HTMLResponse:
-    return _coming_soon_page("价格趋势")
+    return _coming_soon_page("价格趋势", active_nav_key="price")
 
 
 @app.get("/keyword-tracking", summary="关键词追踪页面")
 def keyword_tracking_page() -> HTMLResponse:
-    return _coming_soon_page("关键词追踪")
+    return _coming_soon_page("关键词追踪", active_nav_key="keyword")
 
 
 @app.get("/healthz", summary="健康检查", description="用于检测服务是否存活。")

@@ -20,7 +20,7 @@ description: Generate keyword-focused news analysis payloads and submit them to 
 - “按关键词抓取新闻并生成分析”
 - “把分析结果提交到网站并自动更新页面”
 - “围绕某主题输出价格/舆情趋势报告”
-- “当用户明确说明‘在线上搜索信息：’时”
+- “当用户明确说明‘在线上搜索信息并生成报告：’时”
 
 ## 目标
 

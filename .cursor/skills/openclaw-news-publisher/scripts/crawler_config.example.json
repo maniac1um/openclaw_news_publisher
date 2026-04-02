@@ -1,0 +1,24 @@
+{
+  "seed_urls": [
+    "https://example.com/news",
+    "https://example.com/industry"
+  ],
+  "include_domains": [
+    "example.com"
+  ],
+  "max_pages": 40,
+  "max_items": 25,
+  "timeout_seconds": 15,
+  "retries": 3,
+  "backoff_base_seconds": 1.2,
+  "delay_range_seconds": [1.0, 3.0],
+  "deny_url_keywords": [
+    "login",
+    "signup",
+    "privacy",
+    "terms",
+    "javascript:",
+    "mailto:"
+  ]
+}
+

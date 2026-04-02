@@ -126,14 +126,11 @@ def index(page: str | None = None) -> HTMLResponse:
     .portal-hero p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
 
     .cards {
-      display: grid;
-      grid-template-columns: 1.05fr 1fr;
+      display: flex;
+      flex-direction: column;
       gap: 14px;
-      align-items: start;
+      align-items: stretch;
       padding-bottom: 26px;
-    }
-    @media (max-width: 920px) {
-      .cards { grid-template-columns: 1fr; }
     }
     .card {
       background: var(--surface);
@@ -299,7 +296,7 @@ def index(page: str | None = None) -> HTMLResponse:
     </div>
 
     <div class="cards">
-      <div class="card">
+      <div class="card chat-card">
         <div class="card-title">OpenClaw 对话</div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-row">
@@ -308,7 +305,7 @@ def index(page: str | None = None) -> HTMLResponse:
         </div>
       </div>
 
-      <div class="card">
+      <div class="card status-card">
         <div class="card-title">OpenClaw 工作情况</div>
         <div class="muted" id="status-summary">加载中...</div>
         <ul id="status-list"></ul>

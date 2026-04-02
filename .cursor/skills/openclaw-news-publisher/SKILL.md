@@ -87,6 +87,54 @@ description: Generate keyword-focused news analysis payloads and submit them to 
    - 轮询 `GET /api/v1/openclaw/reports/{ingest_id}`
    - 结束状态：`published` 或 `failed`
 
+## 通用爬虫脚本（支持任意站点）
+
+本技能目录内提供了通用脚本：
+
+- `scripts/news_crawler.py`
+- `scripts/crawler_config.example.json`
+
+脚本目标：
+
+- 不固定站点：可由 OpenClaw 或用户在运行时传入 `--urls`
+- 易改：脚本顶部有可编辑默认变量
+- 反爬基础策略：UA 轮换、随机延时、重试+指数退避、域名白名单与 URL 黑名单
+- 输出 `OpenClawReportIn` 兼容 JSON，可直接用于 `POST /api/v1/openclaw/reports`
+
+### 推荐用法
+
+1) 直接指定站点（动态输入）：
+
+```bash
+python ".cursor/skills/openclaw-news-publisher/scripts/news_crawler.py" \
+  --keyword "羽毛球" \
+  --urls "https://example.com/news" "https://example.com/industry" \
+  --max-pages 40 \
+  --max-items 20 \
+  --output report_payload.json
+```
+
+2) 使用配置文件（便于多站点复用）：
+
+```bash
+python ".cursor/skills/openclaw-news-publisher/scripts/news_crawler.py" \
+  --keyword "羽毛球" \
+  --config ".cursor/skills/openclaw-news-publisher/scripts/crawler_config.example.json" \
+  --output report_payload.json
+```
+
+### 提交到网站接口（人工确认后）
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/openclaw/reports" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: dev-openclaw-key" \
+  -H "X-Request-Id: req-crawl-001" \
+  --data-binary @report_payload.json
+```
+
+注意：遵守本技能顶部安全准则，测试请求数量和权限需严格按用户授权执行。
+
 ## 幂等与重试规则
 
 - 同一任务重试时，必须保持 `X-Request-Id` 和 `task_id` 不变。

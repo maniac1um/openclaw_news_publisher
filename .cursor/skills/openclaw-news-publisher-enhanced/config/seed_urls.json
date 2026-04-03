@@ -1,0 +1,105 @@
+{
+  "version": "1.0",
+  "description": "预设种子网址库，用于首次运行自动发现",
+  "categories": {
+    "sports": {
+      "description": "体育新闻类网站",
+      "url_patterns": [
+        "https://www.{domain}.com",
+        "https://{domain}.com",
+        "https://www.{domain}.co.uk"
+      ],
+      "domains": [
+        "espn", "skysports", "sportingnews", "nba", "premierleague",
+        "fifa", "uefa", "mlb", "nfl", "nhl", "badmintonengland",
+        "wimbledon", "rolandgarros", "usopen", "australianopen"
+      ],
+      "keywords": [
+        "sports", "football", "basketball", "tennis", "badminton",
+        "cricket", "rugby", "golf", "baseball", "hockey", "soccer",
+        "athletics", "swimming", "cycling", "boxing", "mma"
+      ]
+    },
+    "news": {
+      "description": "综合新闻类网站",
+      "url_patterns": [
+        "https://www.{domain}.com",
+        "https://{domain}.com",
+        "https://www.{domain}.cn",
+        "https://{domain}.cn"
+      ],
+      "domains": [
+        "bbc", "cnn", "reuters", "apnews", "bloomberg",
+        "chinanews", "people", "xinhuanet", "nytimes",
+        "washingtonpost", "theguardian", "wsj", "ft"
+      ],
+      "keywords": [
+        "news", "politics", "economy", "business", "world",
+        "national", "local", "breaking", "headlines", "current"
+      ]
+    },
+    "tech": {
+      "description": "科技新闻类网站",
+      "url_patterns": [
+        "https://www.{domain}.com",
+        "https://{domain}.com",
+        "https://news.{domain}.com"
+      ],
+      "domains": [
+        "techcrunch", "theverge", "wired", "arstechnica",
+        "engadget", "gizmodo", "cnet", "zdnet", "slashdot",
+        "hackernews", "producthunt", "github", "stackoverflow"
+      ],
+      "keywords": [
+        "technology", "tech", "innovation", "startups", "gadgets",
+        "apps", "software", "hardware", "ai", "machine learning",
+        "programming", "coding", "development", "cybersecurity"
+      ]
+    },
+    "finance": {
+      "description": "财经新闻类网站",
+      "url_patterns": [
+        "https://www.{domain}.com",
+        "https://{domain}.com",
+        "https://finance.{domain}.com"
+      ],
+      "domains": [
+        "bloomberg", "reuters", "wsj", "ft", "economist",
+        "forbes", "fortune", "businessinsider", "marketwatch",
+        "investing", "seekingalpha", "yahoo finance"
+      ],
+      "keywords": [
+        "finance", "economy", "markets", "stocks", "investing",
+        "business", "trading", "banking", "currency", "crypto"
+      ]
+    },
+    "entertainment": {
+      "description": "娱乐新闻类网站",
+      "url_patterns": [
+        "https://www.{domain}.com",
+        "https://{domain}.com"
+      ],
+      "domains": [
+        "variety", "hollywoodreporter", "deadline", "entertainmentweekly",
+        "tmz", "eonline", "people", "usmagazine", "justjared"
+      ],
+      "keywords": [
+        "entertainment", "movies", "tv", "celebrities", "music",
+        "hollywood", "film", "showbiz", "gossip", "premieres"
+      ]
+    }
+  },
+  "discovery_strategy": {
+    "initial_test_count": 20,
+    "max_concurrent_tests": 10,
+    "test_timeout_seconds": 5,
+    "min_success_for_addition": 2,
+    "domain_variations": [
+      "www.{domain}",
+      "{domain}",
+      "news.{domain}",
+      "sports.{domain}",
+      "tech.{domain}"
+    ]
+  }
+}

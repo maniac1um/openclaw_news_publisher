@@ -1,0 +1,133 @@
+{
+  "version": "2.0",
+  "created_at": "2026-04-03T11:36:00+08:00",
+  "last_updated": "2026-04-03T11:36:00+08:00",
+  "last_full_test": null,
+  "config": {
+    "test_concurrency": 10,
+    "test_timeout_seconds": 5,
+    "cache_ttl_seconds": 3600,
+    "failure_threshold": 3,
+    "min_success_rate": 0.7,
+    "auto_discovery_enabled": true,
+    "daily_test_enabled": true
+  },
+  "active": {
+    "sports": [
+      {
+        "url": "https://www.espn.com",
+        "title": "ESPN",
+        "description": "全球领先的体育媒体",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["sports", "football", "basketball", "tennis", "badminton"]
+      },
+      {
+        "url": "https://www.skysports.com",
+        "title": "天空体育",
+        "description": "英国体育新闻",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["sports", "football", "premier league", "cricket", "rugby"]
+      }
+    ],
+    "news": [
+      {
+        "url": "https://www.chinanews.com.cn",
+        "title": "中国新闻网",
+        "description": "综合性新闻网站",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["news", "china", "politics", "economy", "society"]
+      },
+      {
+        "url": "https://apnews.com",
+        "title": "美联社",
+        "description": "国际新闻机构",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["news", "international", "politics", "business", "entertainment"]
+      }
+    ],
+    "tech": [
+      {
+        "url": "https://techcrunch.com",
+        "title": "TechCrunch",
+        "description": "科技新闻和分析",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["technology", "startups", "innovation", "gadgets", "apps"]
+      },
+      {
+        "url": "https://www.theverge.com",
+        "title": "The Verge",
+        "description": "科技、科学和艺术新闻",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["technology", "science", "culture", "design", "reviews"]
+      }
+    ],
+    "general": [
+      {
+        "url": "https://www.cnn.com",
+        "title": "CNN",
+        "description": "美国有线电视新闻网 - 国际新闻",
+        "added_at": "2026-04-03T11:36:00+08:00",
+        "last_tested": null,
+        "success_count": 0,
+        "failure_count": 0,
+        "success_rate": 0.0,
+        "last_response_time_ms": null,
+        "usage_count": 0,
+        "keywords": ["news", "world", "politics", "business", "health"]
+      }
+    ]
+  },
+  "history": {
+    "removed": [],
+    "test_log": []
+  },
+  "statistics": {
+    "total_active_sources": 7,
+    "total_tests": 0,
+    "successful_tests": 0,
+    "failed_tests": 0,
+    "overall_success_rate": 0.0,
+    "average_response_time_ms": 0
+  },
+  "user_preferences": {
+    "frequent_keywords": [],
+    "preferred_categories": [],
+    "custom_sources": []
+  }
+}

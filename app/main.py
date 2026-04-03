@@ -9,8 +9,6 @@ from pydantic import BaseModel
 from app.api.v1.openclaw import router as openclaw_router
 from app.api.v1.chat import router as chat_router
 from app.core.config import settings
-from app.services.report_management_service import ReportManagementService
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -927,12 +925,13 @@ def _raw_root() -> Path:
     return Path(settings.content_raw_dir)
 
 
-def _report_mgmt() -> ReportManagementService:
-    return ReportManagementService(raw_root=_raw_root(), rendered_root=_rendered_root())
-
-
-def _db_enabled() -> bool:
-    return bool(settings.database_url)
+def _require_public_reports_db() -> None:
+    """新闻动态 API 仅从 PostgreSQL 读取；未配置 DSN 时拒绝请求。"""
+    if not settings.database_url:
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 OPENCLAW_DATABASE_URL，新闻动态接口仅从数据库提供服务。",
+        )
 
 
 def _list_reports_from_db() -> list[dict]:
@@ -989,12 +988,18 @@ def _delete_reports_from_db(ingest_ids: list[str]) -> dict:
     deleted: list[str] = []
     not_found: list[str] = []
     sql = "DELETE FROM reports WHERE ingest_id = %s::uuid RETURNING ingest_id"
+    raw_root, rendered_root = _raw_root(), _rendered_root()
     with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
         for ingest_id in ingest_ids:
             cur.execute(sql, (ingest_id,))
             row = cur.fetchone()
             if row:
-                deleted.append(str(row[0]))
+                iid = str(row[0])
+                deleted.append(iid)
+                # Remove on-disk copies if present (ingest pipeline may still write files).
+                for path in (raw_root / f"{iid}.json", rendered_root / f"{iid}.json"):
+                    if path.exists():
+                        path.unlink()
             else:
                 not_found.append(ingest_id)
         conn.commit()
@@ -1037,50 +1042,23 @@ def _report_to_markdown(report: dict) -> str:
 
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
 def list_reports() -> list[dict]:
-    if _db_enabled():
-        return _list_reports_from_db()
-
-    root = _rendered_root()
-    if not root.exists():
-        return []
-    reports: list[dict] = []
-    for file in sorted(root.glob("*.json"), reverse=True):
-        try:
-            payload = json.loads(file.read_text(encoding="utf-8"))
-            reports.append(
-                {
-                    "ingest_id": payload.get("ingest_id"),
-                    "title": payload.get("title"),
-                    "keyword": payload.get("keyword"),
-                    "generated_at": payload.get("generated_at"),
-                }
-            )
-        except Exception:
-            continue
-    return reports
+    _require_public_reports_db()
+    return _list_reports_from_db()
 
 
 @app.get("/api/v1/public/reports/{ingest_id}", summary="用户侧报告详情")
 def get_report_detail(ingest_id: str) -> dict:
-    if _db_enabled():
-        payload = _get_report_detail_from_db(ingest_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Report not found")
-        return payload
-
-    target = _rendered_root() / f"{ingest_id}.json"
-    if not target.exists():
+    _require_public_reports_db()
+    payload = _get_report_detail_from_db(ingest_id)
+    if payload is None:
         raise HTTPException(status_code=404, detail="Report not found")
-    payload = json.loads(target.read_text(encoding="utf-8"))
-    payload["report_markdown"] = _report_to_markdown(payload)
     return payload
 
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")
 def bulk_delete_reports(request: BulkDeleteRequest) -> dict:
-    if _db_enabled():
-        return _delete_reports_from_db(request.ingest_ids)
-    return _report_mgmt().delete_reports(request.ingest_ids)
+    _require_public_reports_db()
+    return _delete_reports_from_db(request.ingest_ids)
 
 
 def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:

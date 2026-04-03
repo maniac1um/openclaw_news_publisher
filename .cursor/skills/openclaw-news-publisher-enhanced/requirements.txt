@@ -1,0 +1,9 @@
+# OpenClaw News Publisher Enhanced 依赖
+# 仅需aiohttp用于网络测试
+
+aiohttp>=3.9.0
+
+# 可选依赖（用于更高级的功能）
+# beautifulsoup4>=4.12.0  # HTML解析
+# lxml>=4.9.0           # XML/HTML处理
+# selenium>=4.15.0      # JavaScript渲染（高级爬虫）

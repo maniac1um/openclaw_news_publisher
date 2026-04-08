@@ -15,6 +15,9 @@ class Settings(BaseSettings):
     # Optional PostgreSQL DSN, for example:
     # postgresql://openclaw_app:password@127.0.0.1:5432/openclaw_app
     database_url: str | None = Field(default=None)
+    # Optional PostgreSQL DSN dedicated to keyword monitoring.
+    # Example: postgresql://openclaw_monitor:password@127.0.0.1:5432/openclaw_monitor
+    monitoring_database_url: str | None = Field(default=None)
     # OpenClaw Gateway WebSocket endpoint.
     # It is used by the chat proxy in `app/api/v1/chat.py`.
     openclaw_ws_url: str = Field(default="ws://localhost:18789/ws")

@@ -15,6 +15,11 @@
   - `POST /api/v1/openclaw/reports`
   - `GET /api/v1/openclaw/reports/{ingest_id}`
   - `POST /api/v1/openclaw/reports/{ingest_id}/retry`（预留）
+  - 价格监测（MVP）
+    - `POST /api/v1/openclaw/monitoring/bootstrap`
+    - `POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
+    - `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
+    - `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
 - OpenClaw 门户聊天（FastAPI WebSocket）
   - 首页聊天框：OpenClaw 回复在左侧气泡、用户消息在右侧气泡实时展示
   - 中转接口：`WS /api/v1/chat/ws`（服务端连接 OpenClaw Gateway，并将流式增量内容按 `200ms` 聚合后推送前端）
@@ -198,6 +203,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `OPENCLAW_OPENCLAW_HMAC_SECRET`（默认 `dev-secret`）
 - `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
 - `OPENCLAW_DATABASE_URL`（可选；配置后启用 PostgreSQL 存储）
+- `OPENCLAW_MONITORING_DATABASE_URL`（可选；配置后启用 PostgreSQL 价格监测存储）
 - `OPENCLAW_CONTENT_RAW_DIR`（默认 `content/reports/raw`）
 - `OPENCLAW_CONTENT_RENDERED_DIR`（默认 `content/reports/rendered`）
 - `OPENCLAW_GIT_AUTO_PUSH`（默认 `false`）
@@ -248,6 +254,69 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `processing`
 - `published`
 - `failed`
+
+## 价格监测（MVP）
+
+当你配置了 `OPENCLAW_MONITORING_DATABASE_URL` 后，即可使用价格监测接口（表结构由服务端自动创建）。
+
+请求头：同样需要 `X-Api-Key`。
+
+### 1) 创建监测并自动生成候选 URL
+
+`POST /api/v1/openclaw/monitoring/bootstrap`
+
+请求体：
+
+```json
+{
+  "keyword": "羽毛球价格",
+  "candidate_count": 20,
+  "platforms": ["taobao", "tmall", "jd", "news"],
+  "cadence": "daily"
+}
+```
+
+返回示例：
+
+```json
+{
+  "monitor_id": "xxxx-xxxx-xxxx-xxxx",
+  "inserted_urls": 20,
+  "urls": ["https://..."]
+}
+```
+
+### 2) 执行一次采样并写入 observations
+
+`POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
+
+### 3) 查询最近窗口期摘要
+
+`GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
+
+### 4) 可选：追加“商品详情页”URL（提高价格提取命中率）
+
+`POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
+
+快速调用示例（`BASE_URL` 与 `API_KEY` 按你的部署调整）：
+
+```bash
+BASE_URL="http://127.0.0.1:8000"
+API_KEY="dev-openclaw-key"
+
+BOOT=$(curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/bootstrap" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $API_KEY" \
+  -d '{"keyword":"羽毛球价格","candidate_count":20,"platforms":["taobao","tmall","jd"],"cadence":"daily"}')
+
+MONITOR_ID=$(python3 -c "import sys,json; print(json.loads(sys.stdin.read())['monitor_id'])" <<< "$BOOT")
+
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/run-once" \
+  -H "X-Api-Key: $API_KEY"
+
+curl -sS "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/summary?window_days=7" \
+  -H "X-Api-Key: $API_KEY"
+```
 
 ## 门户端删除接口（可复用）
 

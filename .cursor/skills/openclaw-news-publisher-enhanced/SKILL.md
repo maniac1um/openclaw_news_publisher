@@ -32,7 +32,7 @@ description: >
 | §5 | POST 报告 JSON 字段与爬虫输出注意点 |
 | §6 | `news_crawler.py` 行为、参数、配置文件 |
 | §7 | 白名单 CLI、`seed_urls.json`、`whitelist.json` |
-| §8 | 发布服务 HTTP 接口与典型错误 |
+| §8 | 发布服务 & 监测服务 HTTP 接口与典型错误 |
 | §9–§12 | 幂等、质量、限制、用户回执模板 |
 | §13 | 技能目录内运行时文件与 OpenClaw 缓存 |
 
@@ -63,6 +63,7 @@ description: >
 
 - 用户要按 **关键词** 抓取/汇总新闻并生成 **结构化报告**，且要提交到 **发布服务**。
 - 用户明确要调用 `POST /api/v1/openclaw/reports` 或「发布到门户 / 新闻动态」。
+- 用户要做“价格监测/趋势”（不是新闻报道），并使用监测接口（见 §8.6）。
 - 需要 **发现、测试、维护** 可访问的新闻首页 URL（白名单 + 种子库）。
 
 若用户只要一段分析文字、**不**调用发布接口，不必走 POST 流程。
@@ -371,6 +372,66 @@ curl -sS -X POST "${BASE_URL}/api/v1/openclaw/reports" \
 ### 8.5 预留：失败重试接口
 
 - `POST {BASE_URL}/api/v1/openclaw/reports/{ingest_id}/retry` 在参考实现中可能返回 **501**；不要依赖其实现，失败时优先联系用户或修正 JSON 后**新任务**重提。
+
+### 8.6 价格监测 HTTP 接口（MVP）
+
+**前缀**：以下路径均相对于 `{BASE_URL}`（已含 `/api/v1` 的部署以实际为准）。
+
+**前置条件**：
+- 运行 OpenClaw 服务时需要配置 `OPENCLAW_MONITORING_DATABASE_URL`，用于写入 `price_monitors / price_monitor_urls / price_observations`。
+- 认证：请求头 `X-Api-Key: <与部署 OPENCLAW_OPENCLAW_API_KEY 一致>`。
+
+#### 8.6.1 创建监测并自动生成候选 URL
+
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/bootstrap`
+
+请求体示例：
+
+```json
+{
+  "keyword":"羽毛球价格",
+  "candidate_count":20,
+  "platforms":["taobao","tmall","jd","news"],
+  "cadence":"daily"
+}
+```
+
+#### 8.6.2 执行一次采样并写入观测
+
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/run-once`
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/run-once" \
+  -H "X-Api-Key: ${API_KEY}"
+```
+
+#### 8.6.3 查询最近窗口期摘要
+
+- **GET** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
+
+```bash
+curl -sS "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/summary?window_days=7" \
+  -H "X-Api-Key: ${API_KEY}"
+```
+
+#### 8.6.4 可选：追加“商品详情页”URL（提升价格提取命中率）
+
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/urls`
+
+请求体示例：
+
+```json
+{
+  "platform":"jd",
+  "urls":[
+    "https://example.com/product/123"
+  ]
+}
+```
+
+**质量说明（重要）**：
+- `run-once` 为纯 HTTP 抓取（不执行 JavaScript），并使用基于文本的启发式抽取价格。
+- 页面若不易识别价格（或为动态渲染），`priced_observations` 可能为 0。最有效的改善方式是：向 `/urls` 追加更“结构化”的商品详情页 URL。
 
 ---
 

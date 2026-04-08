@@ -18,3 +18,7 @@ htmlcov/
 # Test/runtime artifacts
 /tmp_*.json
 
+# Generated report data (do not commit runtime outputs)
+/content/reports/raw/*.json
+/content/reports/rendered/*.json
+

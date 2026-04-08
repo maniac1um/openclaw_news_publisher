@@ -221,14 +221,60 @@ def index(page: str | None = None) -> HTMLResponse:
       cursor: not-allowed;
     }
 
+    .btn.danger {
+      border-color: #b42318;
+      color: #b42318;
+      background: transparent;
+    }
+
+    .chat-session-bar {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 12px;
+      padding: 10px 12px;
+      border: 1px dashed var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+    }
+
+    #chat-session-select {
+      flex: 1;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      padding: 10px 12px;
+      outline: none;
+      border-radius: 12px;
+      min-width: 0;
+    }
+
+    .chat-empty {
+      color: var(--muted);
+      padding: 10px 12px;
+    }
+
     #status-list { list-style: none; padding: 0; margin: 10px 0 0; }
     .status-item {
-      padding: 10px 12px;
+      padding: 0;
       border: 1px dashed var(--line);
       border-radius: 14px;
       margin-bottom: 10px;
       background: var(--surface);
+      overflow: hidden;
     }
+    .status-item-link {
+      display: block;
+      padding: 10px 12px;
+      color: inherit;
+      text-decoration: none;
+    }
+    .status-item-link:hover .status-item-title { color: var(--brand); }
+    .status-item-link:focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: -2px;
+    }
+    .status-item-body { padding: 10px 12px; }
     .status-item-title { font-weight: 650; margin-bottom: 4px; font-size: 14px; }
     .status-item-meta { color: var(--muted); font-size: 12px; }
 
@@ -290,12 +336,17 @@ def index(page: str | None = None) -> HTMLResponse:
   <div class="wrap">
     <div class="portal-hero">
       <h1>OpenClaw 门户首页</h1>
-      <p>选择一个模块进入页面；也可以在下方向 OpenClaw 发送消息（当前仅做前端演示，对后端未实现）。</p>
+      <p>选择一个模块进入页面；也可以在下方向 OpenClaw 发送消息。</p>
     </div>
 
     <div class="cards">
       <div class="card chat-card">
         <div class="card-title">OpenClaw 对话</div>
+        <div class="chat-session-bar">
+          <select id="chat-session-select"></select>
+          <button class="btn" id="chat-new-session-btn" type="button">新建会话</button>
+          <button class="btn danger" id="chat-delete-session-btn" type="button">删除</button>
+        </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-row">
           <textarea id="openclaw-chat-input" placeholder="输入你希望 OpenClaw 处理的自由文本（例如：分析某关键词、时间范围或直接提问）。"></textarea>
@@ -341,7 +392,17 @@ def index(page: str | None = None) -> HTMLResponse:
         if (!top.length) {
           const li = document.createElement('li');
           li.className = 'status-item';
-          li.innerHTML = `<div class="status-item-title">暂无报告</div><div class="status-item-meta">等待 OpenClaw 提交分析结果...</div>`;
+          const body = document.createElement('div');
+          body.className = 'status-item-body';
+          const t = document.createElement('div');
+          t.className = 'status-item-title';
+          t.textContent = '暂无报告';
+          const m = document.createElement('div');
+          m.className = 'status-item-meta';
+          m.textContent = '等待 OpenClaw 提交分析结果...';
+          body.appendChild(t);
+          body.appendChild(m);
+          li.appendChild(body);
           list.appendChild(li);
           return;
         }
@@ -350,7 +411,34 @@ def index(page: str | None = None) -> HTMLResponse:
           li.className = 'status-item';
           const title = r.title || '未命名报告';
           const meta = r.generated_at || '-';
-          li.innerHTML = `<div class="status-item-title">${title}</div><div class="status-item-meta">生成时间：${meta}</div>`;
+          const id = r.ingest_id;
+          if (id) {
+            const a = document.createElement('a');
+            a.className = 'status-item-link';
+            a.href = '/?page=news&report=' + encodeURIComponent(id);
+            a.setAttribute('title', '在新闻动态中打开此报告');
+            const t = document.createElement('div');
+            t.className = 'status-item-title';
+            t.textContent = title;
+            const m = document.createElement('div');
+            m.className = 'status-item-meta';
+            m.textContent = '生成时间：' + meta;
+            a.appendChild(t);
+            a.appendChild(m);
+            li.appendChild(a);
+          } else {
+            const body = document.createElement('div');
+            body.className = 'status-item-body';
+            const t0 = document.createElement('div');
+            t0.className = 'status-item-title';
+            t0.textContent = title;
+            const m0 = document.createElement('div');
+            m0.className = 'status-item-meta';
+            m0.textContent = '生成时间：' + meta;
+            body.appendChild(t0);
+            body.appendChild(m0);
+            li.appendChild(body);
+          }
           list.appendChild(li);
         }
       } catch (err) {
@@ -366,10 +454,23 @@ def index(page: str | None = None) -> HTMLResponse:
     const chatInput = document.getElementById('openclaw-chat-input');
     const chatSendBtn = document.getElementById('chat-send-btn');
 
+    const chatSessionSelect = document.getElementById('chat-session-select');
+    const chatNewSessionBtn = document.getElementById('chat-new-session-btn');
+    const chatDeleteSessionBtn = document.getElementById('chat-delete-session-btn');
+
     let chatWs = null;
+    // Whether the backend is currently streaming a reply for SOME session.
     let isStreaming = false;
+    let serverBusySessionKey = null;
+
+    // Multi-session local UI state: sessionKey -> messages
+    // Note: backend WebSocket connection is still sequential per browser page.
+    let sessions = {};
+    let sessionOrder = [];
+
     let activeSessionKey = null;
     let activeAssistantBubble = null;
+    let nextSessionNum = 1;
 
     function addChatRow(side, text) {
       const row = document.createElement('div');
@@ -386,6 +487,91 @@ def index(page: str | None = None) -> HTMLResponse:
     function genSessionKey() {
       if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
       return 'session-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+    }
+
+    function rebuildSessionSelect() {
+      chatSessionSelect.innerHTML = '';
+      for (const id of sessionOrder) {
+        const opt = document.createElement('option');
+        opt.value = id;
+        opt.textContent = sessions[id]?.title || id;
+        chatSessionSelect.appendChild(opt);
+      }
+      if (activeSessionKey && sessions[activeSessionKey]) {
+        chatSessionSelect.value = activeSessionKey;
+      }
+    }
+
+    function renderActiveChat() {
+      chatMessages.innerHTML = '';
+      activeAssistantBubble = null;
+
+      // Clear cached DOM refs in all sessions.
+      for (const s of Object.values(sessions)) {
+        s.assistantBubbleEl = null;
+      }
+
+      const session = sessions[activeSessionKey];
+      if (!session) return;
+
+      if (!session.messages.length) {
+        const empty = document.createElement('div');
+        empty.className = 'chat-empty';
+        empty.textContent = '暂无对话消息：点击“新建会话”或发送第一句。';
+        chatMessages.appendChild(empty);
+        return;
+      }
+
+      for (let i = 0; i < session.messages.length; i++) {
+        const msg = session.messages[i];
+        const bubble = addChatRow(msg.side, msg.text);
+        if (msg.side === 'assistant' && session.assistantIndex === i) {
+          session.assistantBubbleEl = bubble;
+          activeAssistantBubble = bubble;
+        }
+      }
+    }
+
+    function createSession() {
+      const id = genSessionKey();
+      const title = `会话 ${nextSessionNum++}`;
+      sessions[id] = {
+        id,
+        title,
+        messages: [],
+        assistantIndex: null,
+        assistantBubbleEl: null,
+      };
+      sessionOrder.unshift(id);
+      activeSessionKey = id;
+      rebuildSessionSelect();
+      renderActiveChat();
+      return id;
+    }
+
+    function deleteActiveSession() {
+      if (!activeSessionKey) return;
+      if (isStreaming) {
+        alert('当前仍在生成中，请等待完成后再删除会话。');
+        return;
+      }
+      if (!confirm('确认删除当前会话吗？')) return;
+
+      const id = activeSessionKey;
+      delete sessions[id];
+      sessionOrder = sessionOrder.filter((x) => x !== id);
+
+      if (!sessionOrder.length) {
+        sessions = {};
+        sessionOrder = [];
+        activeSessionKey = null;
+        createSession();
+        return;
+      }
+
+      activeSessionKey = sessionOrder[0];
+      rebuildSessionSelect();
+      renderActiveChat();
     }
 
     function connectChatWs() {
@@ -405,26 +591,47 @@ def index(page: str | None = None) -> HTMLResponse:
           return;
         }
         if (!data || !data.sessionKey) return;
-        if (data.sessionKey !== activeSessionKey) return;
-
-        if (data.type === 'assistant_delta') {
-          const text = data.text ?? '';
-          if (activeAssistantBubble) activeAssistantBubble.textContent = text;
-          if (data.done) {
+        const sessionKey = data.sessionKey;
+        const session = sessions[sessionKey];
+        if (!session) {
+          // If the session was deleted while streaming, we still must unfreeze UI.
+          if (sessionKey === serverBusySessionKey) {
             isStreaming = false;
-            activeSessionKey = null;
-            activeAssistantBubble = null;
+            serverBusySessionKey = null;
             chatSendBtn.disabled = false;
             chatInput.disabled = false;
             chatInput.focus();
           }
+          return;
+        }
+
+        if (data.type === 'assistant_delta') {
+          const text = data.text ?? '';
+          if (session.assistantIndex === null) return;
+          session.messages[session.assistantIndex].text = text;
+          if (session.assistantBubbleEl) session.assistantBubbleEl.textContent = text;
+          if (data.done && sessionKey === serverBusySessionKey) {
+            isStreaming = false;
+            serverBusySessionKey = null;
+            chatSendBtn.disabled = false;
+            chatInput.disabled = false;
+            chatInput.focus();
+            activeAssistantBubble = null;
+          }
         } else if (data.type === 'assistant_error') {
-          if (activeAssistantBubble) activeAssistantBubble.textContent = `回复失败：${data.error || '未知错误'}`;
-          isStreaming = false;
-          activeSessionKey = null;
-          activeAssistantBubble = null;
-          chatSendBtn.disabled = false;
-          chatInput.disabled = false;
+          const errText = `回复失败：${data.error || '未知错误'}`;
+          if (session.assistantIndex !== null) {
+            session.messages[session.assistantIndex].text = errText;
+          }
+          if (session.assistantBubbleEl) session.assistantBubbleEl.textContent = errText;
+          if (sessionKey === serverBusySessionKey) {
+            isStreaming = false;
+            serverBusySessionKey = null;
+            chatSendBtn.disabled = false;
+            chatInput.disabled = false;
+            chatInput.focus();
+            activeAssistantBubble = null;
+          }
         }
       };
 
@@ -433,20 +640,44 @@ def index(page: str | None = None) -> HTMLResponse:
       };
     }
 
+    chatSessionSelect.addEventListener('change', () => {
+      activeSessionKey = chatSessionSelect.value;
+      renderActiveChat();
+      chatInput.focus();
+    });
+
+    chatNewSessionBtn.addEventListener('click', () => {
+      createSession();
+      chatInput.focus();
+    });
+
+    chatDeleteSessionBtn.addEventListener('click', () => {
+      deleteActiveSession();
+      chatInput.focus();
+    });
+
     chatSendBtn.addEventListener('click', () => {
       const input = chatInput.value.trim();
       if (!input) return;
       if (!chatWs || chatWs.readyState !== WebSocket.OPEN) return;
       if (isStreaming) return;
 
+      if (!activeSessionKey || !sessions[activeSessionKey]) {
+        createSession();
+      }
+
       isStreaming = true;
+      serverBusySessionKey = activeSessionKey;
       chatSendBtn.disabled = true;
       chatInput.disabled = true;
 
-      const sessionKey = genSessionKey();
-      activeSessionKey = sessionKey;
-      addChatRow('user', input);
-      activeAssistantBubble = addChatRow('assistant', 'OpenClaw 正在生成中...');
+      const sessionKey = activeSessionKey;
+      const session = sessions[sessionKey];
+      session.messages.push({ side: 'user', text: input });
+      session.messages.push({ side: 'assistant', text: 'OpenClaw 正在生成中...' });
+      session.assistantIndex = session.messages.length - 1;
+
+      renderActiveChat();
 
       chatWs.send(JSON.stringify({
         type: 'user_message',
@@ -464,6 +695,7 @@ def index(page: str | None = None) -> HTMLResponse:
       }
     });
 
+    createSession();
     connectChatWs();
 
     setupDarkMode();
@@ -705,6 +937,10 @@ def index(page: str | None = None) -> HTMLResponse:
     let activeIngestId = null;
     let selectedIds = new Set();
 
+    function getReportIdFromQuery() {
+      return new URLSearchParams(window.location.search).get('report');
+    }
+
     function escapeHtml(text) {
       return String(text ?? '')
         .replaceAll('&', '&amp;')
@@ -851,8 +1087,15 @@ def index(page: str | None = None) -> HTMLResponse:
         reportCache = Array.isArray(data) ? data : [];
         const filtered = getFilteredReports();
         renderReportList(filtered);
-        if (filtered.length && !activeIngestId) {
-          await loadDetail(filtered[0].ingest_id);
+        const qId = getReportIdFromQuery();
+        let pick = null;
+        if (qId && reportCache.some((r) => r.ingest_id === qId)) {
+          pick = qId;
+        } else if (filtered.length) {
+          pick = filtered[0].ingest_id;
+        }
+        if (pick) {
+          await loadDetail(pick);
         }
       } catch (err) {
         document.getElementById('report-count').textContent = '加载失败';
@@ -872,6 +1115,15 @@ def index(page: str | None = None) -> HTMLResponse:
         renderReportList(getFilteredReports());
         const md = r.report_markdown || reportToMarkdown(r);
         document.getElementById('report-detail').innerHTML = markdownToHtml(md);
+        try {
+          const url = new URL(window.location.href);
+          if (url.searchParams.get('page') === 'news') {
+            url.searchParams.set('report', ingestId);
+            history.replaceState(null, '', url.pathname + url.search);
+          }
+        } catch (e) {
+          /* ignore */
+        }
       } catch (err) {
         document.getElementById('report-detail').innerHTML = `<div class="detail-wrap muted">详情加载失败：${escapeHtml(err?.message || '未知错误')}</div>`;
       }

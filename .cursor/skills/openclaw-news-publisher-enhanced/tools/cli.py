@@ -333,6 +333,7 @@ class NewsWhitelistCLI:
   daily            运行每日维护
   suggest          根据关键词建议URL
   config           管理配置
+  cleanup          清理技能目录临时文件（磁盘空间）
 
 示例:
   python cli.py init --keywords "sports badminton"
@@ -341,6 +342,8 @@ class NewsWhitelistCLI:
   python cli.py list --category sports
   python cli.py refresh
   python cli.py suggest --keyword technology
+  python cli.py cleanup
+  python cli.py cleanup --prune-whitelist-history
         """
         print(help_text)
 
@@ -399,12 +402,32 @@ def main():
     config_group = config_parser.add_mutually_exclusive_group(required=True)
     config_group.add_argument('--show', action='store_true', help='显示配置')
     config_group.add_argument('--set', nargs=2, metavar=('KEY', 'VALUE'), help='设置配置')
+
+    # cleanup 命令（同步子进程，见 skill_cleanup.py）
+    cleanup_parser = subparsers.add_parser('cleanup', help='清理技能目录内临时文件（见 SKILL.md §13）')
+    cleanup_parser.add_argument('--dry-run', action='store_true', help='仅打印将删除的路径')
+    cleanup_parser.add_argument(
+        '--prune-whitelist-history',
+        action='store_true',
+        help='清空 whitelist.json 中 history.test_log 与 history.removed',
+    )
     
     args = parser.parse_args()
     
     if not args.command:
         parser.print_help()
         return
+
+    if args.command == 'cleanup':
+        import subprocess
+
+        script = Path(__file__).resolve().parent / 'skill_cleanup.py'
+        cmd = [sys.executable, str(script)]
+        if args.dry_run:
+            cmd.append('--dry-run')
+        if args.prune_whitelist_history:
+            cmd.append('--prune-whitelist-history')
+        raise SystemExit(subprocess.call(cmd))
     
     cli = NewsWhitelistCLI()
     asyncio.run(cli.handle_command(args))

@@ -3,6 +3,7 @@ import json
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
@@ -177,7 +178,11 @@ async def stream_openclaw_reply(
 
         # 4) chat.send
         chat_req_id = "chat.send:" + session_key
-        idem = "idem:" + session_key
+        # Important: idempotencyKey must be unique per user message.
+        # If we reuse the same sessionKey across multi-turn conversations,
+        # but keep idempotencyKey identical, the Gateway may treat subsequent
+        # chat.send calls as duplicates and fail to advance the conversation.
+        idem = "idem:" + session_key + ":" + str(uuid.uuid4())
         chat_req = {
             "type": "req",
             "id": chat_req_id,

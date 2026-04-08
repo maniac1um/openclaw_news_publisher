@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from app.api.v1.openclaw import router as openclaw_router
 from app.api.v1.chat import router as chat_router
 from app.core.config import settings
+from app.services.monitoring_scheduler import MonitoringScheduler
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -21,6 +22,48 @@ app = FastAPI(
 )
 app.include_router(openclaw_router, prefix=settings.api_v1_prefix)
 app.include_router(chat_router, prefix=settings.api_v1_prefix)
+app.state.monitoring_scheduler_started = False
+
+_monitoring_scheduler: MonitoringScheduler | None = None
+
+
+@app.on_event("startup")
+def _start_monitoring_scheduler() -> None:
+    global _monitoring_scheduler
+    if not settings.monitoring_scheduler_enabled:
+        app.state.monitoring_scheduler_started = False
+        return
+    if not settings.monitoring_database_url:
+        logging.getLogger(__name__).warning(
+            "monitoring scheduler enabled but OPENCLAW_MONITORING_DATABASE_URL is not set; skip starting scheduler"
+        )
+        app.state.monitoring_scheduler_started = False
+        return
+    if not settings.monitoring_scheduler_monitor_id:
+        logging.getLogger(__name__).warning(
+            "monitoring scheduler enabled but OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID is not set; skip starting scheduler"
+        )
+        app.state.monitoring_scheduler_started = False
+        return
+    _monitoring_scheduler = MonitoringScheduler(
+        database_url=settings.monitoring_database_url,
+        monitor_id=settings.monitoring_scheduler_monitor_id,
+        interval_minutes=settings.monitoring_scheduler_interval_minutes,
+        run_on_start=settings.monitoring_scheduler_run_on_start,
+    )
+    _monitoring_scheduler.start()
+    app.state.monitoring_scheduler_started = True
+
+
+@app.on_event("shutdown")
+def _stop_monitoring_scheduler() -> None:
+    global _monitoring_scheduler
+    if _monitoring_scheduler is None:
+        app.state.monitoring_scheduler_started = False
+        return
+    _monitoring_scheduler.stop()
+    _monitoring_scheduler = None
+    app.state.monitoring_scheduler_started = False
 
 
 class BulkDeleteRequest(BaseModel):
@@ -359,6 +402,12 @@ def index(page: str | None = None) -> HTMLResponse:
         <div class="muted" id="status-summary">加载中...</div>
         <ul id="status-list"></ul>
       </div>
+
+      <div class="card scheduler-card">
+        <div class="card-title">定时任务状态</div>
+        <div class="muted" id="scheduler-summary">加载中...</div>
+        <ul id="scheduler-list"></ul>
+      </div>
     </div>
   </div>
 
@@ -446,6 +495,56 @@ def index(page: str | None = None) -> HTMLResponse:
         const li = document.createElement('li');
         li.className = 'status-item';
         li.innerHTML = `<div class="status-item-title">无法获取工作情况</div><div class="status-item-meta">${err?.message || '未知错误'}</div>`;
+        list.appendChild(li);
+      }
+    }
+
+    async function loadSchedulerStatus() {
+      const summary = document.getElementById('scheduler-summary');
+      const list = document.getElementById('scheduler-list');
+      if (!summary || !list) return;
+      summary.textContent = '加载中...';
+      list.innerHTML = '';
+      try {
+        const res = await fetch('/api/v1/public/monitoring/scheduler-status');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        const enabled = !!data.enabled;
+        const started = !!data.started;
+        const configured = !!data.configured;
+        const statusText = started ? '运行中' : (enabled ? '未启动' : '已关闭');
+        summary.textContent = `内部调度器：${statusText}`;
+
+        const rows = [
+          ['模式', data.mode || 'internal'],
+          ['是否启用', enabled ? '是' : '否'],
+          ['是否已启动', started ? '是' : '否'],
+          ['配置完整', configured ? '是' : '否'],
+          ['监测任务ID', data.monitor_id || '-'],
+          ['执行间隔(分钟)', String(data.interval_minutes ?? '-')],
+          ['启动即执行', data.run_on_start ? '是' : '否'],
+        ];
+        for (const [k, v] of rows) {
+          const li = document.createElement('li');
+          li.className = 'status-item';
+          const body = document.createElement('div');
+          body.className = 'status-item-body';
+          const t = document.createElement('div');
+          t.className = 'status-item-title';
+          t.textContent = k;
+          const m = document.createElement('div');
+          m.className = 'status-item-meta';
+          m.textContent = v;
+          body.appendChild(t);
+          body.appendChild(m);
+          li.appendChild(body);
+          list.appendChild(li);
+        }
+      } catch (err) {
+        summary.textContent = '加载失败';
+        const li = document.createElement('li');
+        li.className = 'status-item';
+        li.innerHTML = `<div class="status-item-body"><div class="status-item-title">无法获取定时任务状态</div><div class="status-item-meta">${err?.message || '未知错误'}</div></div>`;
         list.appendChild(li);
       }
     }
@@ -700,6 +799,8 @@ def index(page: str | None = None) -> HTMLResponse:
 
     setupDarkMode();
     loadStatus();
+    loadSchedulerStatus();
+    setInterval(loadSchedulerStatus, 15000);
   </script>
 </body>
 </html>
@@ -1292,6 +1393,23 @@ def _report_to_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _monitoring_scheduler_status_public(app_obj: FastAPI) -> dict:
+    started = bool(getattr(app_obj.state, "monitoring_scheduler_started", False))
+    has_db = bool(settings.monitoring_database_url)
+    has_monitor = bool(settings.monitoring_scheduler_monitor_id)
+    enabled = bool(settings.monitoring_scheduler_enabled)
+    return {
+        "mode": "internal",
+        "enabled": enabled,
+        "started": started,
+        "configured": enabled and has_db and has_monitor,
+        "monitor_id": settings.monitoring_scheduler_monitor_id,
+        "interval_minutes": settings.monitoring_scheduler_interval_minutes,
+        "run_on_start": settings.monitoring_scheduler_run_on_start,
+        "has_monitoring_database_url": has_db,
+    }
+
+
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
 def list_reports() -> list[dict]:
     _require_public_reports_db()
@@ -1305,6 +1423,11 @@ def get_report_detail(ingest_id: str) -> dict:
     if payload is None:
         raise HTTPException(status_code=404, detail="Report not found")
     return payload
+
+
+@app.get("/api/v1/public/monitoring/scheduler-status", summary="用户侧定时任务状态")
+def public_monitoring_scheduler_status() -> dict:
+    return _monitoring_scheduler_status_public(app)
 
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")

@@ -203,3 +203,28 @@ def add_monitoring_urls(
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
     return MonitoringAddUrlsResponse(monitor_id=monitor_id, inserted_urls=inserted)
+
+
+@router.get(
+    "/monitoring/scheduler/status",
+    status_code=status.HTTP_200_OK,
+    summary="查询内部监测定时任务状态",
+    description="返回内部 scheduler 的配置与当前启动状态。",
+)
+def get_monitoring_scheduler_status(
+    request: Request,
+    _: None = Depends(verify_api_key),
+) -> dict:
+    started = bool(getattr(request.app.state, "monitoring_scheduler_started", False))
+    has_db = bool(settings.monitoring_database_url)
+    has_monitor = bool(settings.monitoring_scheduler_monitor_id)
+    return {
+        "mode": "internal",
+        "enabled": settings.monitoring_scheduler_enabled,
+        "started": started,
+        "configured": settings.monitoring_scheduler_enabled and has_db and has_monitor,
+        "monitor_id": settings.monitoring_scheduler_monitor_id,
+        "interval_minutes": settings.monitoring_scheduler_interval_minutes,
+        "run_on_start": settings.monitoring_scheduler_run_on_start,
+        "has_monitoring_database_url": has_db,
+    }

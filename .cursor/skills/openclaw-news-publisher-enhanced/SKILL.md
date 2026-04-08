@@ -429,6 +429,29 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/summary?window_days=
 }
 ```
 
+#### 8.6.5 内部定时任务（OpenClaw 进程内）
+
+当你不想依赖 cron/systemd 时，可直接启用内置 scheduler，让 OpenClaw 按固定间隔自动执行 `run-once`：
+
+```bash
+export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:Openclaw123@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
+export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
+export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'
+export OPENCLAW_MONITORING_SCHEDULER_RUN_ON_START='true'
+```
+
+启动服务后，scheduler 会自动在后台线程运行并在日志输出结果。
+
+状态查询接口：
+
+- **GET** `{BASE_URL}/api/v1/openclaw/monitoring/scheduler/status`
+
+```bash
+curl -sS "$BASE_URL/api/v1/openclaw/monitoring/scheduler/status" \
+  -H "X-Api-Key: ${API_KEY}"
+```
+
 **质量说明（重要）**：
 - `run-once` 为纯 HTTP 抓取（不执行 JavaScript），并使用基于文本的启发式抽取价格。
 - 页面若不易识别价格（或为动态渲染），`priced_observations` 可能为 0。最有效的改善方式是：向 `/urls` 追加更“结构化”的商品详情页 URL。

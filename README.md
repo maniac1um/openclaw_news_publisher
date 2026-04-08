@@ -20,6 +20,7 @@
     - `POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
     - `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
     - `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
+    - `GET /api/v1/openclaw/monitoring/scheduler/status`
 - OpenClaw 门户聊天（FastAPI WebSocket）
   - 首页聊天框：OpenClaw 回复在左侧气泡、用户消息在右侧气泡实时展示
   - 中转接口：`WS /api/v1/chat/ws`（服务端连接 OpenClaw Gateway，并将流式增量内容按 `200ms` 聚合后推送前端）
@@ -204,6 +205,10 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
 - `OPENCLAW_DATABASE_URL`（可选；配置后启用 PostgreSQL 存储）
 - `OPENCLAW_MONITORING_DATABASE_URL`（可选；配置后启用 PostgreSQL 价格监测存储）
+- `OPENCLAW_MONITORING_SCHEDULER_ENABLED`（默认 `false`，开启内部监测定时任务）
+- `OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID`（内部定时任务绑定的 monitor_id）
+- `OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES`（默认 `1440`）
+- `OPENCLAW_MONITORING_SCHEDULER_RUN_ON_START`（默认 `false`，启动后是否立即跑一次）
 - `OPENCLAW_CONTENT_RAW_DIR`（默认 `content/reports/raw`）
 - `OPENCLAW_CONTENT_RENDERED_DIR`（默认 `content/reports/rendered`）
 - `OPENCLAW_GIT_AUTO_PUSH`（默认 `false`）
@@ -317,6 +322,32 @@ curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/run-once" \
 curl -sS "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/summary?window_days=7" \
   -H "X-Api-Key: $API_KEY"
 ```
+
+## OpenClaw 内部定时任务（无需 cron/systemd）
+
+你可以让监测任务直接在 OpenClaw 进程内部周期执行：
+
+```bash
+export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:Openclaw123@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
+export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
+export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'
+export OPENCLAW_MONITORING_SCHEDULER_RUN_ON_START='true'
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+状态检查：
+
+```bash
+curl -sS "http://127.0.0.1:8000/api/v1/openclaw/monitoring/scheduler/status" \
+  -H "X-Api-Key: dev-openclaw-key"
+```
+
+返回字段说明：
+- `enabled`: 是否开启内部 scheduler
+- `started`: 当前进程是否已启动 scheduler
+- `configured`: 配置是否完整（开启 + DB DSN + monitor_id）
 
 ## 门户端删除接口（可复用）
 

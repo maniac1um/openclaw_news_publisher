@@ -1,14 +1,16 @@
 import logging
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app.api.v1.openclaw import router as openclaw_router
 from app.api.v1.chat import router as chat_router
 from app.core.config import settings
+from app.core.security import verify_api_key
 from app.services.monitoring_scheduler import MonitoringScheduler
 logging.basicConfig(
     level=logging.INFO,
@@ -23,6 +25,7 @@ app = FastAPI(
 app.include_router(openclaw_router, prefix=settings.api_v1_prefix)
 app.include_router(chat_router, prefix=settings.api_v1_prefix)
 app.state.monitoring_scheduler_started = False
+app.state.external_scheduler_jobs = {}
 
 _monitoring_scheduler: MonitoringScheduler | None = None
 
@@ -68,6 +71,13 @@ def _stop_monitoring_scheduler() -> None:
 
 class BulkDeleteRequest(BaseModel):
     ingest_ids: list[str]
+
+
+class ExternalSchedulerHeartbeatRequest(BaseModel):
+    job_name: str
+    status: str = "ok"
+    monitor_id: str | None = None
+    message: str | None = None
 
 
 @app.get("/")
@@ -506,14 +516,20 @@ def index(page: str | None = None) -> HTMLResponse:
       summary.textContent = '加载中...';
       list.innerHTML = '';
       try {
-        const res = await fetch('/api/v1/public/monitoring/scheduler-status');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
+        const [resInternal, resExternal] = await Promise.all([
+          fetch('/api/v1/public/monitoring/scheduler-status'),
+          fetch('/api/v1/public/monitoring/external-jobs'),
+        ]);
+        if (!resInternal.ok) throw new Error(`HTTP ${resInternal.status}`);
+        if (!resExternal.ok) throw new Error(`HTTP ${resExternal.status}`);
+        const data = await resInternal.json();
+        const external = await resExternal.json();
         const enabled = !!data.enabled;
         const started = !!data.started;
         const configured = !!data.configured;
         const statusText = started ? '运行中' : (enabled ? '未启动' : '已关闭');
-        summary.textContent = `内部调度器：${statusText}`;
+        const externalCount = Array.isArray(external.jobs) ? external.jobs.length : 0;
+        summary.textContent = `内部调度器：${statusText}；外部任务：${externalCount} 个`;
 
         const rows = [
           ['模式', data.mode || 'internal'],
@@ -539,6 +555,30 @@ def index(page: str | None = None) -> HTMLResponse:
           body.appendChild(m);
           li.appendChild(body);
           list.appendChild(li);
+        }
+
+        const extHeader = document.createElement('li');
+        extHeader.className = 'status-item';
+        extHeader.innerHTML = '<div class="status-item-body"><div class="status-item-title">外部定时任务（cron 等）</div><div class="status-item-meta">通过 heartbeat 上报</div></div>';
+        list.appendChild(extHeader);
+
+        if (!externalCount) {
+          const empty = document.createElement('li');
+          empty.className = 'status-item';
+          empty.innerHTML = '<div class="status-item-body"><div class="status-item-title">暂无外部任务心跳</div><div class="status-item-meta">可调用 /api/v1/openclaw/monitoring/external-heartbeat 上报</div></div>';
+          list.appendChild(empty);
+        } else {
+          for (const job of external.jobs.slice(0, 8)) {
+            const li = document.createElement('li');
+            li.className = 'status-item';
+            const status = job.status || 'unknown';
+            const name = job.job_name || '-';
+            const monitorId = job.monitor_id || '-';
+            const lastSeen = job.last_seen_at || '-';
+            const msg = job.message || '-';
+            li.innerHTML = `<div class="status-item-body"><div class="status-item-title">${name}（${status}）</div><div class="status-item-meta">monitor_id: ${monitorId}</div><div class="status-item-meta">last_seen_at: ${lastSeen}</div><div class="status-item-meta">message: ${msg}</div></div>`;
+            list.appendChild(li);
+          }
         }
       } catch (err) {
         summary.textContent = '加载失败';
@@ -1410,6 +1450,23 @@ def _monitoring_scheduler_status_public(app_obj: FastAPI) -> dict:
     }
 
 
+def _external_scheduler_jobs_public(app_obj: FastAPI) -> dict:
+    jobs = getattr(app_obj.state, "external_scheduler_jobs", {})
+    out = []
+    for job_name, item in jobs.items():
+        out.append(
+            {
+                "job_name": job_name,
+                "status": item.get("status"),
+                "monitor_id": item.get("monitor_id"),
+                "message": item.get("message"),
+                "last_seen_at": item.get("last_seen_at"),
+            }
+        )
+    out.sort(key=lambda x: x.get("last_seen_at") or "", reverse=True)
+    return {"jobs": out}
+
+
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
 def list_reports() -> list[dict]:
     _require_public_reports_db()
@@ -1428,6 +1485,27 @@ def get_report_detail(ingest_id: str) -> dict:
 @app.get("/api/v1/public/monitoring/scheduler-status", summary="用户侧定时任务状态")
 def public_monitoring_scheduler_status() -> dict:
     return _monitoring_scheduler_status_public(app)
+
+
+@app.get("/api/v1/public/monitoring/external-jobs", summary="用户侧外部定时任务心跳")
+def public_monitoring_external_jobs() -> dict:
+    return _external_scheduler_jobs_public(app)
+
+
+@app.post("/api/v1/openclaw/monitoring/external-heartbeat", summary="上报外部定时任务心跳")
+def report_external_scheduler_heartbeat(
+    payload: ExternalSchedulerHeartbeatRequest,
+    request: Request,
+    _: None = Depends(verify_api_key),
+) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    request.app.state.external_scheduler_jobs[payload.job_name] = {
+        "status": payload.status,
+        "monitor_id": payload.monitor_id,
+        "message": payload.message,
+        "last_seen_at": now,
+    }
+    return {"ok": True, "job_name": payload.job_name, "last_seen_at": now}
 
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")

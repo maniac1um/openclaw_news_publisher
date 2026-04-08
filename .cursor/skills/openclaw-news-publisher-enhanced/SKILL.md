@@ -456,6 +456,43 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/scheduler/status" \
 - `run-once` 为纯 HTTP 抓取（不执行 JavaScript），并使用基于文本的启发式抽取价格。
 - 页面若不易识别价格（或为动态渲染），`priced_observations` 可能为 0。最有效的改善方式是：向 `/urls` 追加更“结构化”的商品详情页 URL。
 
+#### 8.6.6 外部 cron/scheduler 心跳上报（门户可视化）
+
+当用户采用外部调度器（如 Linux `cron` / K8s CronJob）而非进程内 scheduler 时，推荐在每次任务执行后上报心跳，供门户首页“定时任务状态”卡片展示最近状态。
+
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/external-heartbeat`
+- **认证**：`X-Api-Key: <与部署 OPENCLAW_OPENCLAW_API_KEY 一致>`
+- **请求体字段**：
+  - `job_name`：任务名（建议稳定不变，作为展示主键）
+  - `status`：任务状态（如 `ok` / `error`）
+  - `monitor_id`：可选，对应监测任务 ID
+  - `message`：可选，补充说明
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${API_KEY}" \
+  -d '{
+    "job_name":"cron-monitor-hourly",
+    "status":"ok",
+    "monitor_id":"9551be2b-3e27-4935-a595-d1699163a3e9",
+    "message":"run-once completed"
+  }'
+```
+
+公开查询（门户端使用）：
+
+- **GET** `{BASE_URL}/api/v1/public/monitoring/external-jobs`
+
+```bash
+curl -sS "$BASE_URL/api/v1/public/monitoring/external-jobs"
+```
+
+建议流程（外部调度）：
+1. 先调用 `POST /monitoring/{monitor_id}/run-once` 执行采样。
+2. 成功/失败后都调用 `POST /monitoring/external-heartbeat` 上报状态。
+3. 首页卡片会同时显示“内部 scheduler 状态 + 外部任务最近心跳”。
+
 ---
 
 ## 9. 幂等与重试

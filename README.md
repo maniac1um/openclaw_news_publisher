@@ -21,6 +21,7 @@
     - `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
     - `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
     - `GET /api/v1/openclaw/monitoring/scheduler/status`
+    - `POST /api/v1/openclaw/monitoring/external-heartbeat`（外部 cron/scheduler 心跳上报）
 - OpenClaw 门户聊天（FastAPI WebSocket）
   - 首页聊天框：OpenClaw 回复在左侧气泡、用户消息在右侧气泡实时展示
   - 中转接口：`WS /api/v1/chat/ws`（服务端连接 OpenClaw Gateway，并将流式增量内容按 `200ms` 聚合后推送前端）
@@ -32,6 +33,8 @@
   - `GET /api/v1/public/reports`
   - `GET /api/v1/public/reports/{ingest_id}`
   - `POST /api/v1/public/reports/bulk-delete`（批量删除）
+  - `GET /api/v1/public/monitoring/scheduler-status`（内部调度器状态）
+  - `GET /api/v1/public/monitoring/external-jobs`（外部任务最近心跳）
 - 文档与运维
   - `/docs`（Swagger）
   - `/healthz`（健康检查）
@@ -348,6 +351,75 @@ curl -sS "http://127.0.0.1:8000/api/v1/openclaw/monitoring/scheduler/status" \
 - `enabled`: 是否开启内部 scheduler
 - `started`: 当前进程是否已启动 scheduler
 - `configured`: 配置是否完整（开启 + DB DSN + monitor_id）
+
+## 外部 cron / scheduler 心跳接入（可与内部并行）
+
+如果你使用系统 `cron`、K8s `CronJob`、或其他外部调度器执行监测任务，可在每次任务完成后上报 heartbeat，让门户首页展示“最近一次执行状态”。
+
+### 1) 上报外部任务心跳（需 API Key）
+
+`POST /api/v1/openclaw/monitoring/external-heartbeat`
+
+请求头：
+- `Content-Type: application/json`
+- `X-Api-Key: <OPENCLAW_OPENCLAW_API_KEY>`
+
+请求体示例：
+
+```json
+{
+  "job_name": "cron-monitor-hourly",
+  "status": "ok",
+  "monitor_id": "9551be2b-3e27-4935-a595-d1699163a3e9",
+  "message": "run-once completed"
+}
+```
+
+### 2) 公开查看外部任务最近心跳
+
+`GET /api/v1/public/monitoring/external-jobs`
+
+返回示例：
+
+```json
+{
+  "jobs": [
+    {
+      "job_name": "cron-monitor-hourly",
+      "status": "ok",
+      "monitor_id": "9551be2b-3e27-4935-a595-d1699163a3e9",
+      "message": "run-once completed",
+      "last_seen_at": "2026-04-08T10:20:30.123456+00:00"
+    }
+  ]
+}
+```
+
+### 3) cron 示例（先执行 run-once，再上报 heartbeat）
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BASE_URL="http://127.0.0.1:8000"
+API_KEY="dev-openclaw-key"
+MONITOR_ID="9551be2b-3e27-4935-a595-d1699163a3e9"
+JOB_NAME="cron-monitor-hourly"
+
+if curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/run-once" \
+  -H "X-Api-Key: $API_KEY" >/dev/null; then
+  STATUS="ok"
+  MSG="run-once completed"
+else
+  STATUS="error"
+  MSG="run-once failed"
+fi
+
+curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $API_KEY" \
+  -d "{\"job_name\":\"$JOB_NAME\",\"status\":\"$STATUS\",\"monitor_id\":\"$MONITOR_ID\",\"message\":\"$MSG\"}" >/dev/null || true
+```
 
 ## 门户端删除接口（可复用）
 

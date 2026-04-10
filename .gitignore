@@ -22,3 +22,6 @@ htmlcov/
 /content/reports/raw/*.json
 /content/reports/rendered/*.json
 
+# Local dev scripts (start/stop server — do not commit)
+/scripts/local/
+

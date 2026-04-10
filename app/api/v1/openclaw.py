@@ -11,6 +11,7 @@ from app.schemas.monitoring import (
     MonitoringRunOnceResponse,
     MonitoringSummaryResponse,
 )
+from app.schemas.news import NewsLibraryCreated, NewsLibraryIn, NewsLibraryItem
 from app.schemas.report import IngestAccepted, IngestStatusResponse, OpenClawReportIn
 from app.services.intake_service import IntakeService
 from app.services.monitoring_service import MonitoringService
@@ -26,6 +27,30 @@ router = APIRouter(
 repo = PostgresIngestRepository(settings.database_url) if settings.database_url else InMemoryIngestRepository()
 job_runner = JobRunner(repo=repo, report_service=ReportService(), publish_service=PublishService())
 intake_service = IntakeService(repo=repo, job_runner=job_runner)
+
+
+def _ensure_news_tables(news_db_url: str) -> None:
+    import psycopg
+
+    sql = """
+    CREATE TABLE IF NOT EXISTS news_library (
+      id BIGSERIAL PRIMARY KEY,
+      keyword TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      source_url TEXT NOT NULL,
+      title TEXT,
+      source_name TEXT,
+      published_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_news_library_keyword_created_at
+      ON news_library (keyword, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_news_library_source_url
+      ON news_library (source_url);
+    """
+    with psycopg.connect(news_db_url) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        conn.commit()
 
 
 @router.post(
@@ -228,3 +253,95 @@ def get_monitoring_scheduler_status(
         "run_on_start": settings.monitoring_scheduler_run_on_start,
         "has_monitoring_database_url": has_db,
     }
+
+
+@router.post(
+    "/news/library",
+    response_model=NewsLibraryCreated,
+    status_code=status.HTTP_201_CREATED,
+    summary="写入新闻库",
+    description="将新闻条目写入独立 news_library（关键词、概述、原文链接等）。",
+)
+def create_news_library_item(
+    payload: NewsLibraryIn,
+    _: None = Depends(verify_api_key),
+) -> NewsLibraryCreated:
+    if not settings.news_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="未配置 OPENCLAW_NEWS_DATABASE_URL。",
+        )
+    _ensure_news_tables(settings.news_database_url)
+    import psycopg
+
+    sql = """
+    INSERT INTO news_library (keyword, summary, source_url, title, source_name, published_at)
+    VALUES (%s, %s, %s, %s, %s, %s)
+    RETURNING id, created_at
+    """
+    with psycopg.connect(settings.news_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            sql,
+            (
+                payload.keyword,
+                payload.summary,
+                payload.source_url,
+                payload.title,
+                payload.source_name,
+                payload.published_at,
+            ),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    return NewsLibraryCreated(id=int(row[0]), created_at=row[1])
+
+
+@router.get(
+    "/news/library",
+    response_model=list[NewsLibraryItem],
+    status_code=status.HTTP_200_OK,
+    summary="查询新闻库",
+    description="按关键词可选过滤新闻库，默认返回最近 100 条。",
+)
+def list_news_library_items(
+    keyword: str | None = None,
+    limit: int = 100,
+    _: None = Depends(verify_api_key),
+) -> list[NewsLibraryItem]:
+    if not settings.news_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="未配置 OPENCLAW_NEWS_DATABASE_URL。",
+        )
+    _ensure_news_tables(settings.news_database_url)
+    cap = max(1, min(int(limit), 500))
+    import psycopg
+
+    base_sql = """
+    SELECT id, keyword, summary, source_url, title, source_name, published_at, created_at
+    FROM news_library
+    """
+    params: tuple = ()
+    if keyword and keyword.strip():
+        base_sql += " WHERE keyword ILIKE %s"
+        params = (f"%{keyword.strip()}%",)
+    base_sql += " ORDER BY created_at DESC LIMIT %s"
+    params = (*params, cap)
+
+    out: list[NewsLibraryItem] = []
+    with psycopg.connect(settings.news_database_url) as conn, conn.cursor() as cur:
+        cur.execute(base_sql, params)
+        for row in cur.fetchall():
+            out.append(
+                NewsLibraryItem(
+                    id=int(row[0]),
+                    keyword=row[1],
+                    summary=row[2],
+                    source_url=row[3],
+                    title=row[4],
+                    source_name=row[5],
+                    published_at=row[6],
+                    created_at=row[7],
+                )
+            )
+    return out

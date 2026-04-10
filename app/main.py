@@ -1,17 +1,19 @@
 import logging
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
-from app.api.v1.openclaw import router as openclaw_router
+from app.api.v1.openclaw import intake_service, router as openclaw_router
 from app.api.v1.chat import router as chat_router
 from app.core.config import settings
 from app.core.security import verify_api_key
+from app.schemas.report import OpenClawReportIn
 from app.services.monitoring_scheduler import MonitoringScheduler
+from app.services.monitoring_service import MonitoringService
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -80,10 +82,174 @@ class ExternalSchedulerHeartbeatRequest(BaseModel):
     message: str | None = None
 
 
+class NewsBulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+class NewsTriggerAnalysisRequest(BaseModel):
+    monitor_id: str
+    keyword: str | None = None
+    window_days: int = 7
+    news_hours: int = 72
+    horizon: str = "24h"
+    publish: bool = False
+
+
 @app.get("/")
 def index(page: str | None = None) -> HTMLResponse:
-    # `/?page=news` keeps the original "news dashboard" UI reachable.
-    if page != "news":
+    # `/?page=topic` shows the original report-analysis dashboard.
+    if page == "news":
+        return HTMLResponse(
+            """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OpenClaw 新闻动态</title>
+  <style>
+    :root {
+      --bg: #f7f8fb; --surface: #ffffff; --surface-2: #f1f3f7; --text: #1f2937;
+      --muted: #6b7280; --line: #d8dee8; --brand: #0b4fa3; --link: #164b91; --header: #0a2f66; --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218; --surface: #171c25; --surface-2: #202735; --text: #e6edf7;
+      --muted: #9fb0c9; --line: #2c3444; --brand: #66a3ff; --link: #8eb8ff; --header: #101624; --header-text: #f3f6fd;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color:var(--text); background:var(--bg); }
+    .topbar { background:var(--header); color:var(--header-text); border-bottom: 1px solid rgba(255,255,255,.15); }
+    .wrap { width: min(1200px, 100% - 28px); margin: 0 auto; }
+    .topbar-inner { display:flex; align-items:center; justify-content:space-between; padding:12px 0; }
+    .logo { font-size:20px; font-weight:700; letter-spacing:.5px; }
+    .top-actions { display:flex; gap:8px; }
+    .top-actions button { border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08); color:var(--header-text); padding:7px 12px; border-radius:12px; cursor:pointer; font-size:14px; }
+    .nav { background:var(--surface); border-bottom:1px solid var(--line); margin-bottom:14px; }
+    .nav ul { list-style:none; margin:0; padding:0; display:flex; gap:18px; overflow-x:auto; white-space:nowrap; }
+    .nav li, .nav a { padding:12px 0; border-bottom:2px solid transparent; cursor:pointer; color:inherit; display:inline-block; text-decoration:none; }
+    .nav li.active { border-color:var(--brand); color:var(--brand); font-weight:600; }
+    .page { display:grid; grid-template-columns: 380px 1fr; gap:18px; padding-bottom:20px; }
+    .left, .right { background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+    .panel-title { margin:0; font-size:18px; border-bottom:1px solid var(--line); padding:12px 14px; background:var(--surface-2); }
+    .toolbar { display:flex; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); }
+    .toolbar input, .toolbar button { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:7px 10px; border-radius:12px; }
+    .toolbar button.danger { border-color:#b42318; color:#b42318; background:transparent; }
+    #news-list { list-style:none; margin:0; padding:0; max-height: calc(100vh - 245px); overflow:auto; }
+    .news-item { padding:12px 14px; border-bottom:1px dashed var(--line); cursor:pointer; display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:start; }
+    .news-item:hover { background:var(--surface-2); }
+    .news-item.active { border-left:3px solid var(--brand); background:var(--surface-2); }
+    .news-title { font-size:15px; line-height:1.45; margin-bottom:4px; }
+    .news-meta { color:var(--muted); font-size:12px; }
+    .detail-wrap { padding:16px 18px 28px; line-height:1.75; }
+    .detail-wrap h2 { margin:.2em 0 .6em; color:var(--brand); }
+    .muted { color:var(--muted); }
+    a { color:var(--link); text-decoration:none; }
+    a:hover { text-decoration:underline; }
+    .empty { padding:14px; color:var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw 新闻自动化平台</div><div class="top-actions"><button onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
+  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
+  <div class="wrap">
+    <div class="page">
+      <div class="left">
+        <h2 class="panel-title">新闻库条目</h2>
+        <div class="toolbar">
+          <input id="keyword-search" placeholder="输入关键词筛选" />
+          <button id="refresh-btn">刷新</button>
+          <button id="delete-btn" class="danger">删除选中</button>
+        </div>
+        <ul id="news-list"></ul>
+      </div>
+      <div class="right">
+        <h2 class="panel-title">新闻详情</h2>
+        <div id="news-detail" class="detail-wrap muted">请先从左侧选择一条新闻。</div>
+      </div>
+    </div>
+  </div>
+  <script>
+    let newsCache = [];
+    let activeId = null;
+    let selectedIds = new Set();
+    function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); }
+    function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); }
+    function escapeHtml(text) { return String(text ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll(\"'\",'&#039;'); }
+    function filteredNews() {
+      const kw = document.getElementById('keyword-search').value.trim().toLowerCase();
+      if (!kw) return newsCache;
+      return newsCache.filter((n) => String(n.keyword || '').toLowerCase().includes(kw) || String(n.title || '').toLowerCase().includes(kw) || String(n.summary || '').toLowerCase().includes(kw));
+    }
+    function renderList(arr) {
+      const list = document.getElementById('news-list');
+      list.innerHTML = '';
+      if (!arr.length) { list.innerHTML = '<li class="empty">暂无新闻数据。</li>'; return; }
+      for (const n of arr) {
+        const li = document.createElement('li');
+        li.className = 'news-item' + (activeId === n.id ? ' active' : '');
+        li.innerHTML = `<input type="checkbox" class="row-check" data-id="${n.id}" ${selectedIds.has(n.id) ? 'checked' : ''} />
+          <div>
+            <div class="news-title">${escapeHtml(n.title || '未命名新闻')}</div>
+            <div class="news-meta">关键词：${escapeHtml(n.keyword || '-')}</div>
+            <div class="news-meta">时间：${escapeHtml(n.published_at || n.created_at || '-')}</div>
+          </div>`;
+        li.onclick = (e) => { if (e.target && e.target.classList.contains('row-check')) return; activeId = n.id; renderList(filteredNews()); renderDetail(n); };
+        const ck = li.querySelector('.row-check');
+        ck?.addEventListener('click', (e) => e.stopPropagation());
+        ck?.addEventListener('change', (e) => {
+          const id = Number(e.target.getAttribute('data-id'));
+          if (!id) return;
+          if (e.target.checked) selectedIds.add(id); else selectedIds.delete(id);
+        });
+        list.appendChild(li);
+      }
+    }
+    function renderDetail(n) {
+      const box = document.getElementById('news-detail');
+      box.innerHTML = `<h2>${escapeHtml(n.title || '未命名新闻')}</h2>
+        <p><strong>关键词：</strong>${escapeHtml(n.keyword || '-')}</p>
+        <p><strong>来源：</strong>${escapeHtml(n.source_name || '-')}</p>
+        <p><strong>发布时间：</strong>${escapeHtml(n.published_at || n.created_at || '-')}</p>
+        <p><strong>新闻概述：</strong></p>
+        <p>${escapeHtml(n.summary || '-')}</p>
+        <p><strong>原文链接：</strong><a href="${escapeHtml(n.source_url || '#')}" target="_blank" rel="noreferrer">直达原文</a></p>`;
+    }
+    async function loadNews() {
+      const res = await fetch('/api/v1/public/news/library?limit=300');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      newsCache = Array.isArray(data) ? data : [];
+      const arr = filteredNews();
+      renderList(arr);
+      if (!activeId && arr.length) { activeId = arr[0].id; renderList(arr); renderDetail(arr[0]); }
+    }
+    async function deleteSelectedNews() {
+      if (!selectedIds.size) { alert('请先勾选需要删除的新闻。'); return; }
+      if (!confirm(`确认删除选中的 ${selectedIds.size} 条新闻吗？`)) return;
+      const res = await fetch('/api/v1/public/news/library/bulk-delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      selectedIds.clear();
+      activeId = null;
+      document.getElementById('news-detail').innerHTML = '<div class="muted">删除成功，请从左侧重新选择新闻。</div>';
+      await loadNews();
+    }
+    document.getElementById('keyword-search').addEventListener('input', () => renderList(filteredNews()));
+    document.getElementById('refresh-btn').addEventListener('click', async () => { try { await loadNews(); } catch (e) { document.getElementById('news-list').innerHTML = `<li class="empty">加载失败：${escapeHtml(e?.message || '未知错误')}</li>`; }});
+    document.getElementById('delete-btn').addEventListener('click', async () => {
+      try { await deleteSelectedNews(); } catch (e) { alert(`删除失败：${e?.message || '未知错误'}`); }
+    });
+    setupDarkMode();
+    loadNews().catch((e) => { document.getElementById('news-list').innerHTML = `<li class="empty">加载失败：${escapeHtml(e?.message || '未知错误')}</li>`; });
+  </script>
+</body>
+</html>
+"""
+        )
+    if page != "topic":
         return HTMLResponse(
             """
 <!doctype html>
@@ -381,7 +547,7 @@ def index(page: str | None = None) -> HTMLResponse:
         <li><a href="/?page=news">新闻动态</a></li>
         <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
-        <li><a href="/keyword-tracking">关键词追踪</a></li>
+        <li><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
   </div>
@@ -410,13 +576,10 @@ def index(page: str | None = None) -> HTMLResponse:
       <div class="card status-card">
         <div class="card-title">OpenClaw 工作情况</div>
         <div class="muted" id="status-summary">加载中...</div>
+        <div class="muted" id="work-overview-hint" style="font-size:13px;margin-top:6px;line-height:1.5;">
+          价格与新闻进度建议每 30 分钟对照一次；本卡片每 30 分钟自动刷新（仍可在下方手动刷新页面）。
+        </div>
         <ul id="status-list"></ul>
-      </div>
-
-      <div class="card scheduler-card">
-        <div class="card-title">定时任务状态</div>
-        <div class="muted" id="scheduler-summary">加载中...</div>
-        <ul id="scheduler-list"></ul>
       </div>
     </div>
   </div>
@@ -436,139 +599,153 @@ def index(page: str | None = None) -> HTMLResponse:
         document.body.classList.add('dark');
       }
     }
-    async function loadStatus() {
+    function appendSectionHeading(list, title, metaText) {
+      const li = document.createElement('li');
+      li.className = 'status-item';
+      const body = document.createElement('div');
+      body.className = 'status-item-body';
+      const t = document.createElement('div');
+      t.className = 'status-item-title';
+      t.style.fontWeight = '800';
+      t.style.color = 'var(--brand)';
+      t.textContent = title;
+      const m = document.createElement('div');
+      m.className = 'status-item-meta';
+      m.textContent = metaText;
+      body.appendChild(t);
+      body.appendChild(m);
+      li.appendChild(body);
+      list.appendChild(li);
+    }
+
+    async function loadOpenClawWorkOverview() {
       const summary = document.getElementById('status-summary');
       const list = document.getElementById('status-list');
       summary.textContent = '加载中...';
       list.innerHTML = '';
       try {
-        const res = await fetch('/api/v1/public/reports');
+        const res = await fetch('/api/v1/public/portal/openclaw-work-overview');
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const arr = Array.isArray(data) ? data : [];
-        summary.textContent = `当前已发布报告：${arr.length} 条`;
-        const top = arr.slice(0, 4);
-        if (!top.length) {
-          const li = document.createElement('li');
-          li.className = 'status-item';
-          const body = document.createElement('div');
-          body.className = 'status-item-body';
-          const t = document.createElement('div');
-          t.className = 'status-item-title';
-          t.textContent = '暂无报告';
-          const m = document.createElement('div');
-          m.className = 'status-item-meta';
-          m.textContent = '等待 OpenClaw 提交分析结果...';
-          body.appendChild(t);
-          body.appendChild(m);
-          li.appendChild(body);
-          list.appendChild(li);
-          return;
-        }
-        for (const r of top) {
-          const li = document.createElement('li');
-          li.className = 'status-item';
-          const title = r.title || '未命名报告';
-          const meta = r.generated_at || '-';
-          const id = r.ingest_id;
-          if (id) {
-            const a = document.createElement('a');
-            a.className = 'status-item-link';
-            a.href = '/?page=news&report=' + encodeURIComponent(id);
-            a.setAttribute('title', '在新闻动态中打开此报告');
-            const t = document.createElement('div');
-            t.className = 'status-item-title';
-            t.textContent = title;
-            const m = document.createElement('div');
-            m.className = 'status-item-meta';
-            m.textContent = '生成时间：' + meta;
-            a.appendChild(t);
-            a.appendChild(m);
-            li.appendChild(a);
-          } else {
+        const o = await res.json();
+        const rc = o.reports?.published_count ?? 0;
+        const pc = o.price_monitoring?.observation_count ?? 0;
+        const nc = o.news_library?.item_count ?? 0;
+        const jc = o.external_cron?.job_count ?? 0;
+        summary.textContent = `报告 ${rc} 条 · 价格观测 ${pc} 条 · 新闻库 ${nc} 条 · 外部定时 ${jc} 个`;
+
+        const rep = o.reports || {};
+        if (rep.error) {
+          appendSectionHeading(list, '报告发布', '读取失败：' + rep.error);
+        } else if (!rep.available) {
+          appendSectionHeading(list, '报告发布', '未配置主库 OPENCLAW_DATABASE_URL。');
+        } else {
+          appendSectionHeading(
+            list,
+            '报告发布',
+            '已发布 ' + rep.published_count + ' 条 · 最近更新：' + (rep.last_generated_at || '—'),
+          );
+          const top = rep.recent || [];
+          if (!top.length) {
+            const li = document.createElement('li');
+            li.className = 'status-item';
             const body = document.createElement('div');
             body.className = 'status-item-body';
-            const t0 = document.createElement('div');
-            t0.className = 'status-item-title';
-            t0.textContent = title;
-            const m0 = document.createElement('div');
-            m0.className = 'status-item-meta';
-            m0.textContent = '生成时间：' + meta;
-            body.appendChild(t0);
-            body.appendChild(m0);
+            const m = document.createElement('div');
+            m.className = 'status-item-meta';
+            m.textContent = '暂无报告，等待 OpenClaw 入站。';
+            body.appendChild(m);
             li.appendChild(body);
+            list.appendChild(li);
+          } else {
+            for (const r of top) {
+              const li = document.createElement('li');
+              li.className = 'status-item';
+              const title = r.title || '未命名报告';
+              const meta = r.generated_at || '-';
+              const id = r.ingest_id;
+              if (id) {
+                const a = document.createElement('a');
+                a.className = 'status-item-link';
+                a.href = '/?page=news&report=' + encodeURIComponent(id);
+                a.setAttribute('title', '在新闻动态中打开此报告');
+                const t = document.createElement('div');
+                t.className = 'status-item-title';
+                t.textContent = title;
+                const m = document.createElement('div');
+                m.className = 'status-item-meta';
+                m.textContent = '生成时间：' + meta;
+                a.appendChild(t);
+                a.appendChild(m);
+                li.appendChild(a);
+              } else {
+                const body = document.createElement('div');
+                body.className = 'status-item-body';
+                const t0 = document.createElement('div');
+                t0.className = 'status-item-title';
+                t0.textContent = title;
+                const m0 = document.createElement('div');
+                m0.className = 'status-item-meta';
+                m0.textContent = '生成时间：' + meta;
+                body.appendChild(t0);
+                body.appendChild(m0);
+                li.appendChild(body);
+              }
+              list.appendChild(li);
+            }
           }
-          list.appendChild(li);
-        }
-      } catch (err) {
-        summary.textContent = '加载失败';
-        const li = document.createElement('li');
-        li.className = 'status-item';
-        li.innerHTML = `<div class="status-item-title">无法获取工作情况</div><div class="status-item-meta">${err?.message || '未知错误'}</div>`;
-        list.appendChild(li);
-      }
-    }
-
-    async function loadSchedulerStatus() {
-      const summary = document.getElementById('scheduler-summary');
-      const list = document.getElementById('scheduler-list');
-      if (!summary || !list) return;
-      summary.textContent = '加载中...';
-      list.innerHTML = '';
-      try {
-        const [resInternal, resExternal] = await Promise.all([
-          fetch('/api/v1/public/monitoring/scheduler-status'),
-          fetch('/api/v1/public/monitoring/external-jobs'),
-        ]);
-        if (!resInternal.ok) throw new Error(`HTTP ${resInternal.status}`);
-        if (!resExternal.ok) throw new Error(`HTTP ${resExternal.status}`);
-        const data = await resInternal.json();
-        const external = await resExternal.json();
-        const enabled = !!data.enabled;
-        const started = !!data.started;
-        const configured = !!data.configured;
-        const statusText = started ? '运行中' : (enabled ? '未启动' : '已关闭');
-        const externalCount = Array.isArray(external.jobs) ? external.jobs.length : 0;
-        summary.textContent = `内部调度器：${statusText}；外部任务：${externalCount} 个`;
-
-        const rows = [
-          ['模式', data.mode || 'internal'],
-          ['是否启用', enabled ? '是' : '否'],
-          ['是否已启动', started ? '是' : '否'],
-          ['配置完整', configured ? '是' : '否'],
-          ['监测任务ID', data.monitor_id || '-'],
-          ['执行间隔(分钟)', String(data.interval_minutes ?? '-')],
-          ['启动即执行', data.run_on_start ? '是' : '否'],
-        ];
-        for (const [k, v] of rows) {
-          const li = document.createElement('li');
-          li.className = 'status-item';
-          const body = document.createElement('div');
-          body.className = 'status-item-body';
-          const t = document.createElement('div');
-          t.className = 'status-item-title';
-          t.textContent = k;
-          const m = document.createElement('div');
-          m.className = 'status-item-meta';
-          m.textContent = v;
-          body.appendChild(t);
-          body.appendChild(m);
-          li.appendChild(body);
-          list.appendChild(li);
         }
 
-        const extHeader = document.createElement('li');
-        extHeader.className = 'status-item';
-        extHeader.innerHTML = '<div class="status-item-body"><div class="status-item-title">外部定时任务（cron 等）</div><div class="status-item-meta">通过 heartbeat 上报</div></div>';
-        list.appendChild(extHeader);
+        const pr = o.price_monitoring || {};
+        if (pr.error) {
+          appendSectionHeading(list, '价格趋势监测', '读取失败：' + pr.error);
+        } else if (!pr.available) {
+          appendSectionHeading(list, '价格趋势监测', '未配置监测库 OPENCLAW_MONITORING_DATABASE_URL。');
+        } else {
+          appendSectionHeading(
+            list,
+            '价格趋势监测',
+            '监测任务 ' +
+              pr.monitor_count +
+              ' 个 · 累计观测 ' +
+              pr.observation_count +
+              ' 条 · 最近采样：' +
+              (pr.last_captured_at || '—'),
+          );
+        }
 
-        if (!externalCount) {
+        const nw = o.news_library || {};
+        if (nw.error) {
+          appendSectionHeading(list, '新闻动态监测（新闻库）', '读取失败：' + nw.error);
+        } else if (!nw.available) {
+          appendSectionHeading(list, '新闻动态监测（新闻库）', '未配置新闻库 OPENCLAW_NEWS_DATABASE_URL。');
+        } else {
+          appendSectionHeading(
+            list,
+            '新闻动态监测（新闻库）',
+            '库内 ' + nw.item_count + ' 条 · 最近入库：' + (nw.last_created_at || '—'),
+          );
+        }
+
+        const ext = o.external_cron || {};
+        const jobs = Array.isArray(ext.jobs) ? ext.jobs : [];
+        appendSectionHeading(
+          list,
+          '外部定时任务（cron / OpenClaw cron）',
+          '已上报 ' + jobs.length + ' 个 · 通过 external-heartbeat 写入',
+        );
+        if (!jobs.length) {
           const empty = document.createElement('li');
           empty.className = 'status-item';
-          empty.innerHTML = '<div class="status-item-body"><div class="status-item-title">暂无外部任务心跳</div><div class="status-item-meta">可调用 /api/v1/openclaw/monitoring/external-heartbeat 上报</div></div>';
+          const body = document.createElement('div');
+          body.className = 'status-item-body';
+          const m = document.createElement('div');
+          m.className = 'status-item-meta';
+          m.textContent = '暂无心跳记录。可 POST /api/v1/openclaw/monitoring/external-heartbeat 上报。';
+          body.appendChild(m);
+          empty.appendChild(body);
           list.appendChild(empty);
         } else {
-          for (const job of external.jobs.slice(0, 8)) {
+          for (const job of jobs.slice(0, 12)) {
             const li = document.createElement('li');
             li.className = 'status-item';
             const status = job.status || 'unknown';
@@ -576,7 +753,18 @@ def index(page: str | None = None) -> HTMLResponse:
             const monitorId = job.monitor_id || '-';
             const lastSeen = job.last_seen_at || '-';
             const msg = job.message || '-';
-            li.innerHTML = `<div class="status-item-body"><div class="status-item-title">${name}（${status}）</div><div class="status-item-meta">monitor_id: ${monitorId}</div><div class="status-item-meta">last_seen_at: ${lastSeen}</div><div class="status-item-meta">message: ${msg}</div></div>`;
+            li.innerHTML =
+              '<div class="status-item-body"><div class="status-item-title">' +
+              name +
+              '（' +
+              status +
+              '）</div><div class="status-item-meta">monitor_id: ' +
+              monitorId +
+              '</div><div class="status-item-meta">last_seen_at: ' +
+              lastSeen +
+              '</div><div class="status-item-meta">message: ' +
+              msg +
+              '</div></div>';
             list.appendChild(li);
           }
         }
@@ -584,7 +772,10 @@ def index(page: str | None = None) -> HTMLResponse:
         summary.textContent = '加载失败';
         const li = document.createElement('li');
         li.className = 'status-item';
-        li.innerHTML = `<div class="status-item-body"><div class="status-item-title">无法获取定时任务状态</div><div class="status-item-meta">${err?.message || '未知错误'}</div></div>`;
+        li.innerHTML =
+          '<div class="status-item-body"><div class="status-item-title">无法获取工作情况</div><div class="status-item-meta">' +
+          (err?.message || '未知错误') +
+          '</div></div>';
         list.appendChild(li);
       }
     }
@@ -838,9 +1029,8 @@ def index(page: str | None = None) -> HTMLResponse:
     connectChatWs();
 
     setupDarkMode();
-    loadStatus();
-    loadSchedulerStatus();
-    setInterval(loadSchedulerStatus, 15000);
+    loadOpenClawWorkOverview();
+    setInterval(loadOpenClawWorkOverview, 30 * 60 * 1000);
   </script>
 </body>
 </html>
@@ -1047,10 +1237,10 @@ def index(page: str | None = None) -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
-        <li class="active"><a href="/?page=news">新闻动态</a></li>
-        <li><a href="/topic-analysis">专题分析</a></li>
+        <li><a href="/?page=news">新闻动态</a></li>
+        <li class="active"><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
-        <li><a href="/keyword-tracking">关键词追踪</a></li>
+        <li><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
   </div>
@@ -1258,7 +1448,7 @@ def index(page: str | None = None) -> HTMLResponse:
         document.getElementById('report-detail').innerHTML = markdownToHtml(md);
         try {
           const url = new URL(window.location.href);
-          if (url.searchParams.get('page') === 'news') {
+          if (url.searchParams.get('page') === 'topic') {
             url.searchParams.set('report', ingestId);
             history.replaceState(null, '', url.pathname + url.search);
           }
@@ -1353,6 +1543,67 @@ def _list_reports_from_db() -> list[dict]:
     return out
 
 
+def _require_public_news_db() -> None:
+    if not settings.news_database_url:
+        raise HTTPException(
+            status_code=503,
+            detail="未配置 OPENCLAW_NEWS_DATABASE_URL，新闻库接口不可用。",
+        )
+
+
+def _list_news_library_from_db(limit: int = 100, keyword: str | None = None) -> list[dict]:
+    import psycopg
+
+    sql = """
+    SELECT id, keyword, summary, source_url, title, source_name, published_at, created_at
+    FROM news_library
+    """
+    params: list = []
+    if keyword and keyword.strip():
+        sql += " WHERE keyword ILIKE %s"
+        params.append(f"%{keyword.strip()}%")
+    sql += " ORDER BY created_at DESC LIMIT %s"
+    params.append(limit)
+
+    out: list[dict] = []
+    with psycopg.connect(settings.news_database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, tuple(params))
+        for row in cur.fetchall():
+            out.append(
+                {
+                    "id": int(row[0]),
+                    "keyword": row[1],
+                    "summary": row[2],
+                    "source_url": row[3],
+                    "title": row[4],
+                    "source_name": row[5],
+                    "published_at": row[6].isoformat() if row[6] else None,
+                    "created_at": row[7].isoformat() if row[7] else None,
+                }
+            )
+    return out
+
+
+def _delete_news_library_from_db(ids: list[int]) -> dict:
+    import psycopg
+
+    if not settings.news_database_url:
+        return {"requested": len(ids), "deleted": [], "not_found": ids}
+    deleted: list[int] = []
+    not_found: list[int] = []
+    sql = "DELETE FROM news_library WHERE id = %s RETURNING id"
+    with psycopg.connect(settings.news_database_url) as conn, conn.cursor() as cur:
+        for item_id in ids:
+            cur.execute(sql, (int(item_id),))
+            row = cur.fetchone()
+            if row:
+                deleted.append(int(row[0]))
+            else:
+                not_found.append(int(item_id))
+        conn.commit()
+    return {"requested": len(ids), "deleted": deleted, "not_found": not_found}
+
+
 def _get_report_detail_from_db(ingest_id: str) -> dict | None:
     import psycopg
 
@@ -1433,6 +1684,188 @@ def _report_to_markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _list_news_items_from_db(limit: int = 120) -> list[dict]:
+    import psycopg
+
+    sql = """
+    SELECT ingest_id, payload_json->'rendered_payload' AS rendered_payload, generated_at
+    FROM reports
+    WHERE status = 'published'
+      AND payload_json ? 'rendered_payload'
+    ORDER BY generated_at DESC NULLS LAST, id DESC
+    LIMIT 200
+    """
+    out: list[dict] = []
+    with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        rows = cur.fetchall()
+    for ingest_id, rendered_payload, generated_at in rows:
+        payload = rendered_payload or {}
+        items = payload.get("items") or []
+        for item in items:
+            out.append(
+                {
+                    "ingest_id": str(ingest_id),
+                    "report_title": payload.get("title") or payload.get("generated_title") or "未命名报告",
+                    "keyword": payload.get("keyword"),
+                    "generated_at": payload.get("generated_at") or (generated_at.isoformat() if generated_at else None),
+                    "title": item.get("title"),
+                    "source": item.get("source"),
+                    "url": item.get("url"),
+                    "published_at": item.get("published_at"),
+                    "summary": item.get("summary"),
+                    "price": item.get("price"),
+                    "currency": item.get("currency"),
+                }
+            )
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _topic_analysis_cards_from_db(limit: int = 60) -> list[dict]:
+    import psycopg
+
+    sql = """
+    SELECT ingest_id, payload_json->'rendered_payload' AS rendered_payload, generated_at
+    FROM reports
+    WHERE status = 'published'
+      AND payload_json ? 'rendered_payload'
+    ORDER BY generated_at DESC NULLS LAST, id DESC
+    LIMIT %s
+    """
+    out: list[dict] = []
+    with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, (limit,))
+        for ingest_id, rendered_payload, generated_at in cur.fetchall():
+            payload = rendered_payload or {}
+            out.append(
+                {
+                    "ingest_id": str(ingest_id),
+                    "title": payload.get("title") or payload.get("generated_title") or "未命名专题",
+                    "keyword": payload.get("keyword"),
+                    "generated_at": payload.get("generated_at") or (generated_at.isoformat() if generated_at else None),
+                    "analysis": payload.get("analysis") or "暂无分析内容",
+                    "items_count": payload.get("items_count") or len(payload.get("items") or []),
+                    "sources": payload.get("sources") or [],
+                }
+            )
+    return out
+
+
+def _list_monitors_public() -> list[dict]:
+    import psycopg
+
+    if not settings.monitoring_database_url:
+        return []
+    sql = """
+    SELECT
+      m.monitor_id,
+      m.keyword,
+      m.cadence,
+      m.created_at,
+      COUNT(DISTINCT u.id) AS url_count,
+      COUNT(o.id) AS observation_count,
+      MAX(o.captured_at) AS last_captured_at
+    FROM price_monitors m
+    LEFT JOIN price_monitor_urls u ON u.monitor_id = m.monitor_id
+    LEFT JOIN price_observations o ON o.monitor_id = m.monitor_id
+    GROUP BY m.monitor_id, m.keyword, m.cadence, m.created_at
+    ORDER BY m.created_at DESC
+    """
+    out: list[dict] = []
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql)
+        for row in cur.fetchall():
+            out.append(
+                {
+                    "monitor_id": str(row[0]),
+                    "keyword": row[1],
+                    "cadence": row[2],
+                    "created_at": row[3].isoformat() if row[3] else None,
+                    "url_count": int(row[4] or 0),
+                    "observation_count": int(row[5] or 0),
+                    "last_captured_at": row[6].isoformat() if row[6] else None,
+                }
+            )
+    return out
+
+
+def _monitor_timeseries_public(monitor_id: str, window_days: int) -> dict:
+    import psycopg
+
+    if not settings.monitoring_database_url:
+        return {"monitor_id": monitor_id, "points": []}
+    sql = """
+    SELECT
+      DATE_TRUNC('day', captured_at) AS day,
+      MIN(price) AS min_price,
+      MAX(price) AS max_price,
+      AVG(price) AS avg_price,
+      COUNT(*) AS priced_count
+    FROM price_observations
+    WHERE monitor_id = %s::uuid
+      AND captured_at >= NOW() - (%s || ' days')::interval
+      AND price IS NOT NULL
+    GROUP BY DATE_TRUNC('day', captured_at)
+    ORDER BY day ASC
+    """
+    points: list[dict] = []
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, (monitor_id, int(window_days)))
+        for day, min_price, max_price, avg_price, priced_count in cur.fetchall():
+            points.append(
+                {
+                    "date": day.date().isoformat(),
+                    "min_price": float(min_price) if min_price is not None else None,
+                    "max_price": float(max_price) if max_price is not None else None,
+                    "avg_price": float(avg_price) if avg_price is not None else None,
+                    "priced_count": int(priced_count or 0),
+                }
+            )
+    return {"monitor_id": monitor_id, "window_days": int(window_days), "points": points}
+
+
+def _monitor_observations_public(monitor_id: str, limit: int = 200) -> dict:
+    import psycopg
+
+    if not settings.monitoring_database_url:
+        return {"monitor_id": monitor_id, "rows": []}
+
+    sql = """
+    SELECT
+      o.captured_at,
+      o.title,
+      o.price
+    FROM price_observations o
+    WHERE o.monitor_id = %s::uuid
+      AND o.price IS NOT NULL
+    ORDER BY o.captured_at ASC
+    LIMIT %s
+    """
+    rows: list[dict] = []
+    prev_price: float | None = None
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(sql, (monitor_id, int(limit)))
+        for idx, (captured_at, title, price) in enumerate(cur.fetchall(), start=1):
+            p = float(price) if price is not None else None
+            delta = None
+            if p is not None and prev_price is not None:
+                delta = p - prev_price
+            if p is not None:
+                prev_price = p
+            rows.append(
+                {
+                    "index": idx,
+                    "item_name": title or "未命名商品",
+                    "captured_at": captured_at.isoformat() if captured_at else None,
+                    "price": p,
+                    "delta_from_prev": delta,
+                }
+            )
+    return {"monitor_id": monitor_id, "rows": rows}
+
+
 def _monitoring_scheduler_status_public(app_obj: FastAPI) -> dict:
     started = bool(getattr(app_obj.state, "monitoring_scheduler_started", False))
     has_db = bool(settings.monitoring_database_url)
@@ -1467,6 +1900,238 @@ def _external_scheduler_jobs_public(app_obj: FastAPI) -> dict:
     return {"jobs": out}
 
 
+def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
+    """门户首页「工作情况」聚合：报告、价格监测、新闻库、外部 cron（不含内部 scheduler）。"""
+    ext = _external_scheduler_jobs_public(app_obj)
+    jobs = ext.get("jobs") or []
+
+    reports: dict = {
+        "available": False,
+        "published_count": 0,
+        "last_generated_at": None,
+        "recent": [],
+    }
+    if settings.database_url:
+        import psycopg
+
+        try:
+            with psycopg.connect(settings.database_url) as conn, conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*), MAX(generated_at)
+                    FROM reports
+                    WHERE status = 'published'
+                      AND payload_json ? 'rendered_payload'
+                    """
+                )
+                cnt, mx = cur.fetchone()
+                reports["available"] = True
+                reports["published_count"] = int(cnt or 0)
+                reports["last_generated_at"] = mx.isoformat() if mx else None
+                cur.execute(
+                    """
+                    SELECT ingest_id, payload_json->'rendered_payload' AS rendered_payload, generated_at
+                    FROM reports
+                    WHERE status = 'published'
+                      AND payload_json ? 'rendered_payload'
+                    ORDER BY generated_at DESC NULLS LAST, id DESC
+                    LIMIT 4
+                    """
+                )
+                recent: list[dict] = []
+                for ingest_id, rendered_payload, generated_at in cur.fetchall():
+                    payload = rendered_payload or {}
+                    recent.append(
+                        {
+                            "ingest_id": str(ingest_id),
+                            "title": payload.get("title")
+                            or payload.get("generated_title")
+                            or "未命名报告",
+                            "generated_at": payload.get("generated_at")
+                            or (generated_at.isoformat() if generated_at else None),
+                        }
+                    )
+                reports["recent"] = recent
+        except Exception as exc:  # noqa: BLE001
+            reports["error"] = str(exc)
+
+    price: dict = {
+        "available": False,
+        "monitor_count": 0,
+        "observation_count": 0,
+        "last_captured_at": None,
+    }
+    if settings.monitoring_database_url:
+        import psycopg
+
+        try:
+            with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM price_monitors")
+                price["monitor_count"] = int(cur.fetchone()[0] or 0)
+                cur.execute("SELECT COUNT(*), MAX(captured_at) FROM price_observations")
+                oc, lc = cur.fetchone()
+                price["observation_count"] = int(oc or 0)
+                price["last_captured_at"] = lc.isoformat() if lc else None
+                price["available"] = True
+        except Exception as exc:  # noqa: BLE001
+            price["error"] = str(exc)
+
+    news: dict = {
+        "available": False,
+        "item_count": 0,
+        "last_created_at": None,
+    }
+    if settings.news_database_url:
+        import psycopg
+
+        try:
+            with psycopg.connect(settings.news_database_url) as conn, conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*), MAX(created_at) FROM news_library")
+                ic, mx = cur.fetchone()
+                news["item_count"] = int(ic or 0)
+                news["last_created_at"] = mx.isoformat() if mx else None
+                news["available"] = True
+        except Exception as exc:  # noqa: BLE001
+            news["error"] = str(exc)
+
+    return {
+        "reports": reports,
+        "price_monitoring": price,
+        "news_library": news,
+        "external_cron": {"job_count": len(jobs), "jobs": jobs},
+        "refresh_hint_seconds": 1800,
+    }
+
+
+def _parse_iso_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        normalized = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(normalized)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _sentiment_from_text(text: str) -> str:
+    lower = text.lower()
+    positive = ("上涨", "走强", "利好", "增持", "突破", "反弹", "上调", "紧张", "减产")
+    negative = ("下跌", "走弱", "利空", "抛售", "回落", "暴跌", "下调", "宽松", "增产")
+    p = sum(1 for token in positive if token in lower)
+    n = sum(1 for token in negative if token in lower)
+    if p > n:
+        return "bullish"
+    if n > p:
+        return "bearish"
+    return "neutral"
+
+
+def _build_news_price_analysis(
+    monitor_id: str,
+    keyword: str | None,
+    window_days: int,
+    news_hours: int,
+    horizon: str,
+) -> dict:
+    if not settings.monitoring_database_url:
+        raise HTTPException(status_code=503, detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。")
+    _require_public_news_db()
+
+    summary = MonitoringService(settings.monitoring_database_url).get_summary(
+        monitor_id=monitor_id,
+        window_days=window_days,
+    )
+    effective_keyword = (keyword or summary.get("keyword") or "").strip()
+    if not effective_keyword:
+        effective_keyword = "未命名关键词"
+
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=max(1, news_hours))
+    recent_news = []
+    for item in _list_news_library_from_db(limit=300, keyword=effective_keyword):
+        ts = _parse_iso_dt(item.get("published_at")) or _parse_iso_dt(item.get("created_at"))
+        if not ts:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        if ts >= since:
+            recent_news.append(item)
+    recent_news.sort(
+        key=lambda x: (_parse_iso_dt(x.get("published_at")) or _parse_iso_dt(x.get("created_at")) or now),
+        reverse=True,
+    )
+    key_news = recent_news[:5]
+
+    bullish = 0
+    bearish = 0
+    neutral = 0
+    for row in key_news:
+        txt = f"{row.get('title') or ''} {row.get('summary') or ''}"
+        s = _sentiment_from_text(txt)
+        if s == "bullish":
+            bullish += 1
+        elif s == "bearish":
+            bearish += 1
+        else:
+            neutral += 1
+
+    min_price = summary.get("min_price")
+    max_price = summary.get("max_price")
+    latest_price = summary.get("latest_price")
+    trend = "震荡"
+    if isinstance(min_price, (int, float)) and isinstance(max_price, (int, float)) and isinstance(latest_price, (int, float)):
+        mid = (float(min_price) + float(max_price)) / 2.0
+        if latest_price > mid * 1.02:
+            trend = "偏强"
+        elif latest_price < mid * 0.98:
+            trend = "偏弱"
+
+    forecast = "震荡"
+    if bullish > bearish:
+        forecast = "上行"
+    elif bearish > bullish:
+        forecast = "下行"
+    elif trend == "偏强":
+        forecast = "上行"
+    elif trend == "偏弱":
+        forecast = "下行"
+
+    priced_obs = int(summary.get("priced_observations") or 0)
+    confidence = "低"
+    if priced_obs >= 20 and len(key_news) >= 2:
+        confidence = "高"
+    elif priced_obs >= 5 and len(key_news) >= 1:
+        confidence = "中"
+
+    evidence_lines = []
+    for row in key_news[:3]:
+        evidence_lines.append(
+            f"- {row.get('title') or '未命名新闻'} | {row.get('source_name') or '未知来源'} | {row.get('source_url') or '-'}"
+        )
+    news_evidence = "\n".join(evidence_lines) if evidence_lines else "- 最近窗口无高相关新增新闻。"
+    analysis = (
+        f"{effective_keyword} 在近{window_days}天价格区间为 {summary.get('min_price')}~{summary.get('max_price')}，"
+        f"最新价格 {summary.get('latest_price')}，当前走势判断为{trend}。"
+        f"结合近{news_hours}小时新闻（利多{bullish} / 利空{bearish} / 中性{neutral}），"
+        f"预测未来{horizon}倾向{forecast}，置信度{confidence}。"
+        f"若后续出现与当前判断相反的高优先级事件，结论可能快速失效。\n\n关键新闻证据：\n{news_evidence}"
+    )
+
+    return {
+        "monitor_id": monitor_id,
+        "keyword": effective_keyword,
+        "window_days": window_days,
+        "news_hours": news_hours,
+        "horizon": horizon,
+        "summary": summary,
+        "news_count": len(recent_news),
+        "key_news": key_news,
+        "forecast": forecast,
+        "confidence": confidence,
+        "analysis": analysis,
+    }
+
+
 @app.get("/api/v1/public/reports", summary="用户侧报告列表")
 def list_reports() -> list[dict]:
     _require_public_reports_db()
@@ -1482,6 +2147,33 @@ def get_report_detail(ingest_id: str) -> dict:
     return payload
 
 
+@app.get("/api/v1/public/news/library", summary="用户侧新闻库列表")
+def public_news_library(limit: int = 100, keyword: str | None = None) -> list[dict]:
+    _require_public_news_db()
+    cap = max(1, min(int(limit), 500))
+    return _list_news_library_from_db(limit=cap, keyword=keyword)
+
+
+@app.post("/api/v1/public/news/library/bulk-delete", summary="用户侧批量删除新闻库条目")
+def public_news_library_bulk_delete(request: NewsBulkDeleteRequest) -> dict:
+    _require_public_news_db()
+    return _delete_news_library_from_db(request.ids)
+
+
+@app.get("/api/v1/public/news/items", summary="用户侧新闻通道条目")
+def public_news_items(limit: int = 120) -> list[dict]:
+    _require_public_reports_db()
+    cap = max(1, min(int(limit), 300))
+    return _list_news_items_from_db(limit=cap)
+
+
+@app.get("/api/v1/public/topic/cards", summary="用户侧专题分析卡片")
+def public_topic_cards(limit: int = 60) -> list[dict]:
+    _require_public_reports_db()
+    cap = max(1, min(int(limit), 200))
+    return _topic_analysis_cards_from_db(limit=cap)
+
+
 @app.get("/api/v1/public/monitoring/scheduler-status", summary="用户侧定时任务状态")
 def public_monitoring_scheduler_status() -> dict:
     return _monitoring_scheduler_status_public(app)
@@ -1490,6 +2182,31 @@ def public_monitoring_scheduler_status() -> dict:
 @app.get("/api/v1/public/monitoring/external-jobs", summary="用户侧外部定时任务心跳")
 def public_monitoring_external_jobs() -> dict:
     return _external_scheduler_jobs_public(app)
+
+
+@app.get(
+    "/api/v1/public/portal/openclaw-work-overview",
+    summary="门户首页 OpenClaw 工作情况聚合",
+)
+def public_openclaw_work_overview() -> dict:
+    return _openclaw_work_overview_public(app)
+
+
+@app.get("/api/v1/public/monitoring/monitors", summary="用户侧关键词监测总览")
+def public_monitoring_monitors() -> list[dict]:
+    return _list_monitors_public()
+
+
+@app.get("/api/v1/public/monitoring/{monitor_id}/timeseries", summary="用户侧价格时序数据")
+def public_monitoring_timeseries(monitor_id: str, window_days: int = 30) -> dict:
+    cap_days = max(1, min(int(window_days), 365))
+    return _monitor_timeseries_public(monitor_id=monitor_id, window_days=cap_days)
+
+
+@app.get("/api/v1/public/monitoring/{monitor_id}/observations", summary="用户侧价格采集明细")
+def public_monitoring_observations(monitor_id: str, limit: int = 200) -> dict:
+    cap_limit = max(1, min(int(limit), 1000))
+    return _monitor_observations_public(monitor_id=monitor_id, limit=cap_limit)
 
 
 @app.post("/api/v1/openclaw/monitoring/external-heartbeat", summary="上报外部定时任务心跳")
@@ -1506,6 +2223,63 @@ def report_external_scheduler_heartbeat(
         "last_seen_at": now,
     }
     return {"ok": True, "job_name": payload.job_name, "last_seen_at": now}
+
+
+@app.post("/api/v1/openclaw/analysis/news-trigger", summary="新闻触发价格联合分析")
+def trigger_news_price_analysis(
+    payload: NewsTriggerAnalysisRequest,
+    background_tasks: BackgroundTasks,
+    _: None = Depends(verify_api_key),
+) -> dict:
+    window_days = max(1, min(int(payload.window_days), 365))
+    news_hours = max(1, min(int(payload.news_hours), 24 * 30))
+    result = _build_news_price_analysis(
+        monitor_id=payload.monitor_id,
+        keyword=payload.keyword,
+        window_days=window_days,
+        news_hours=news_hours,
+        horizon=payload.horizon,
+    )
+    ingest_id = None
+    ingest_status = None
+    if payload.publish:
+        now = datetime.now(timezone.utc)
+        report = OpenClawReportIn(
+            task_id=f"news-trigger-{payload.monitor_id}-{int(now.timestamp())}",
+            keyword=result["keyword"],
+            time_range={"start": (now - timedelta(days=window_days)), "end": now},
+            sources=["monitoring-summary", "news-library"],
+            items=[
+                {
+                    "title": n.get("title") or "未命名新闻",
+                    "source": n.get("source_name") or "unknown",
+                    "url": n.get("source_url") or "",
+                    "published_at": _parse_iso_dt(n.get("published_at"))
+                    or _parse_iso_dt(n.get("created_at"))
+                    or now,
+                    "summary": n.get("summary"),
+                }
+                for n in result["key_news"]
+                if n.get("source_url")
+            ],
+            analysis=result["analysis"],
+            generated_title=f"{result['keyword']} 新闻触发价格分析（{payload.horizon}）",
+            generated_at=now,
+        )
+        ingest_id, ingest_status = intake_service.ingest(
+            report=report,
+            request_id=f"news-trigger-{payload.monitor_id}-{int(now.timestamp())}",
+            background_tasks=background_tasks,
+        )
+
+    return {
+        "ok": True,
+        "mode": "event_triggered",
+        "publish": payload.publish,
+        "ingest_id": ingest_id,
+        "ingest_status": ingest_status,
+        **result,
+    }
 
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")
@@ -1643,7 +2417,7 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
         <li{ ' class="active"' if active_nav_key == "news" else ""}><a href="/?page=news">新闻动态</a></li>
         <li{ ' class="active"' if active_nav_key == "topic" else ""}><a href="/topic-analysis">专题分析</a></li>
         <li{ ' class="active"' if active_nav_key == "price" else ""}><a href="/price-trend">价格趋势</a></li>
-        <li{ ' class="active"' if active_nav_key == "keyword" else ""}><a href="/keyword-tracking">关键词追踪</a></li>
+        <li{ ' class="active"' if active_nav_key == "keyword" else ""}><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
   </div>
@@ -1676,17 +2450,626 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
 
 @app.get("/topic-analysis", summary="专题分析页面")
 def topic_analysis_page() -> HTMLResponse:
-    return _coming_soon_page("专题分析", active_nav_key="topic")
+    return RedirectResponse(url="/?page=topic")
 
 
 @app.get("/price-trend", summary="价格趋势页面")
 def price_trend_page() -> HTMLResponse:
-    return _coming_soon_page("价格趋势", active_nav_key="price")
+    return HTMLResponse(
+        """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>价格趋势</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --brand: #0b4fa3;
+      --header: #0a2f66;
+      --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218;
+      --surface: #171c25;
+      --surface-2: #202735;
+      --text: #e6edf7;
+      --muted: #9fb0c9;
+      --line: #2c3444;
+      --brand: #66a3ff;
+      --header: #101624;
+      --header-text: #f3f6fd;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .wrap { width: min(1200px, 100% - 28px); margin: 0 auto; }
+    .topbar {
+      background: var(--header);
+      color: var(--header-text);
+      border-bottom: 1px solid rgba(255,255,255,0.15);
+    }
+    .topbar-inner { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+    .top-actions { display: flex; gap: 8px; }
+    .top-actions button {
+      border: 1px solid rgba(255,255,255,.35);
+      background: rgba(255,255,255,.08);
+      color: var(--header-text);
+      padding: 7px 12px;
+      border-radius: 12px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .nav { background: var(--surface); border-bottom: 1px solid var(--line); margin-bottom: 14px; }
+    .nav ul { list-style: none; margin: 0; padding: 0; display: flex; gap: 18px; overflow-x: auto; white-space: nowrap; }
+    .nav li, .nav a { padding: 12px 0; border-bottom: 2px solid transparent; cursor: pointer; color: inherit; display: inline-block; text-decoration: none; }
+    .nav li.active { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+    .page { display: grid; grid-template-columns: 340px 1fr; gap: 18px; padding-bottom: 20px; }
+    .left, .right { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; }
+    .panel-title {
+      margin: 0;
+      font-size: 18px;
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      background: var(--surface-2);
+      color: var(--brand);
+    }
+    .toolbar { display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); align-items: center; }
+    .toolbar input, .toolbar select, .toolbar button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      padding: 7px 10px;
+      border-radius: 12px;
+      font-size: 14px;
+    }
+    #monitor-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 245px); overflow: auto; }
+    .monitor-item {
+      padding: 12px 14px;
+      border-bottom: 1px dashed var(--line);
+      cursor: pointer;
+      background: var(--surface);
+    }
+    .monitor-item:hover { background: var(--surface-2); }
+    .monitor-item.active { border-left: 3px solid var(--brand); background: var(--surface-2); }
+    .monitor-title { font-size: 15px; line-height: 1.45; margin-bottom: 4px; }
+    .monitor-meta { color: var(--muted); font-size: 12px; }
+    .right-wrap { padding: 12px 14px 16px; }
+    .detail-title { margin: 0 0 10px; color: var(--brand); }
+    .muted { color: var(--muted); }
+    .chart-wrap { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 8px; margin-bottom: 12px; }
+    canvas { width: 100%; height: 300px; display: block; }
+    .chart-tooltip {
+      position: absolute;
+      pointer-events: none;
+      display: none;
+      z-index: 20;
+      background: rgba(0, 0, 0, 0.78);
+      color: #fff;
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 12px;
+      line-height: 1.4;
+      white-space: nowrap;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+    }
+    table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+    th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
+    th { background: var(--surface-2); }
+    .delta-up { color: #b42318; font-weight: 600; }
+    .delta-down { color: #127a38; font-weight: 600; }
+    .delta-flat { color: var(--muted); }
+    .empty { padding: 14px; color: var(--muted); }
+    @media (max-width: 920px) {
+      .page { grid-template-columns: 1fr; }
+      #monitor-list { max-height: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="top-actions">
+        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button onclick="location.href='/docs'">接口文档</button>
+      </div>
+    </div>
+  </div>
+  <div class="nav">
+    <div class="wrap">
+      <ul id="category-nav">
+        <li><a href="/">门户首页</a></li>
+        <li><a href="/?page=news">新闻动态</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
+        <li class="active"><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/keyword-tracking">监测参数</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap">
+    <div class="page">
+      <div class="left">
+        <h2 class="panel-title">追踪商品</h2>
+        <div class="toolbar">
+          <input id="monitor-search" placeholder="输入关键词筛选" />
+          <button id="refresh-list-btn">刷新</button>
+        </div>
+        <ul id="monitor-list"></ul>
+      </div>
+      <div class="right">
+        <h2 class="panel-title" id="right-title">价格趋势详情</h2>
+        <div class="right-wrap">
+          <div class="toolbar" style="padding:0 0 10px;border-bottom:none;">
+            <label>窗口：</label>
+            <select id="window-select">
+              <option value="7">7天</option>
+              <option value="14">14天</option>
+              <option value="30" selected>30天</option>
+              <option value="90">90天</option>
+            </select>
+            <button id="refresh-detail-btn">刷新详情</button>
+          </div>
+          <div class="chart-wrap">
+            <canvas id="trend-canvas" width="980" height="300"></canvas>
+            <div id="chart-tooltip" class="chart-tooltip"></div>
+          </div>
+          <div class="muted" style="margin:0 0 8px;">数据采集记录</div>
+          <table>
+            <thead>
+              <tr>
+                <th>序号</th>
+                <th>商品名</th>
+                <th>数据收集时间</th>
+                <th>价格</th>
+                <th>较上次变化</th>
+              </tr>
+            </thead>
+            <tbody id="obs-body">
+              <tr><td colspan="5" class="empty">请选择左侧商品</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    let monitors = [];
+    let activeMonitorId = null;
+    let trendPlotPoints = [];
+
+    function escapeHtml(text) {
+      return String(text ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function loadMonitors() {
+      const res = await fetch('/api/v1/public/monitoring/monitors');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const raw = Array.isArray(data) ? data : [];
+      const grouped = new Map();
+      for (const m of raw) {
+        const key = String(m.keyword || '').trim().toLowerCase() || '__empty__';
+        const current = grouped.get(key);
+        if (!current) {
+          grouped.set(key, m);
+          continue;
+        }
+        const curObs = Number(current.observation_count || 0);
+        const newObs = Number(m.observation_count || 0);
+        const curTs = Date.parse(current.last_captured_at || '') || 0;
+        const newTs = Date.parse(m.last_captured_at || '') || 0;
+        if (newObs > curObs || (newObs === curObs && newTs > curTs)) {
+          grouped.set(key, m);
+        }
+      }
+      monitors = Array.from(grouped.values()).sort((a, b) => {
+        const aObs = Number(a.observation_count || 0);
+        const bObs = Number(b.observation_count || 0);
+        if (bObs !== aObs) return bObs - aObs;
+        const aTs = Date.parse(a.last_captured_at || '') || 0;
+        const bTs = Date.parse(b.last_captured_at || '') || 0;
+        return bTs - aTs;
+      });
+      if (!activeMonitorId && monitors.length) activeMonitorId = monitors[0].monitor_id;
+      if (activeMonitorId && !monitors.some((m) => m.monitor_id === activeMonitorId)) {
+        activeMonitorId = monitors.length ? monitors[0].monitor_id : null;
+      }
+      renderMonitorList();
+    }
+
+    function renderMonitorList() {
+      const list = document.getElementById('monitor-list');
+      const keyword = document.getElementById('monitor-search').value.trim().toLowerCase();
+      const filtered = !keyword
+        ? monitors
+        : monitors.filter((m) => String(m.keyword || '').toLowerCase().includes(keyword));
+      list.innerHTML = '';
+      if (!filtered.length) {
+        list.innerHTML = '<li class="empty">暂无可用追踪商品。</li>';
+        return;
+      }
+      for (const m of filtered) {
+        const li = document.createElement('li');
+        li.className = 'monitor-item' + (m.monitor_id === activeMonitorId ? ' active' : '');
+        li.innerHTML = `
+          <div class="monitor-title">${escapeHtml(m.keyword || '未命名商品')}</div>
+          <div class="monitor-meta">monitor: ${escapeHtml((m.monitor_id || '').slice(0,8))} | 观测数：${m.observation_count || 0}</div>
+          <div class="monitor-meta">最近采样：${escapeHtml(m.last_captured_at || '-')}</div>
+        `;
+        li.onclick = async () => {
+          activeMonitorId = m.monitor_id;
+          renderMonitorList();
+          await loadDetail();
+        };
+        list.appendChild(li);
+      }
+    }
+
+    function drawLine(points, title) {
+      const canvas = document.getElementById('trend-canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const styles = getComputedStyle(document.body);
+      const surface = styles.getPropertyValue('--surface').trim() || '#ffffff';
+      const line = styles.getPropertyValue('--line').trim() || '#d8dee8';
+      const text = styles.getPropertyValue('--text').trim() || '#1f2937';
+      const brand = styles.getPropertyValue('--brand').trim() || '#0b4fa3';
+      const muted = styles.getPropertyValue('--muted').trim() || '#6b7280';
+      ctx.fillStyle = surface;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!points.length) {
+        ctx.fillStyle = muted;
+        ctx.fillText('暂无可绘制价格点', 20, 30);
+        return;
+      }
+      const vals = points.map(p => p.value).filter(v => typeof v === 'number');
+      if (!vals.length) {
+        ctx.fillStyle = muted;
+        ctx.fillText('暂无可绘制价格点', 20, 30);
+        return;
+      }
+      let minV = Math.min(...vals);
+      let maxV = Math.max(...vals);
+      // When all values are identical, add a small vertical range so the line/point is visible.
+      if (Math.abs(maxV - minV) < 1e-9) {
+        const pad = Math.max(Math.abs(maxV) * 0.05, 1);
+        minV -= pad;
+        maxV += pad;
+      }
+      const pad = 40, w = canvas.width - pad * 2, h = canvas.height - pad * 2;
+      ctx.strokeStyle = line;
+      ctx.strokeRect(pad, pad, w, h);
+      ctx.strokeStyle = brand;
+      ctx.lineWidth = 2;
+      const minTs = Math.min(...points.map((p) => p.ts));
+      const maxTs = Math.max(...points.map((p) => p.ts));
+      trendPlotPoints = [];
+      ctx.beginPath();
+      points.forEach((p, idx) => {
+        const x = pad + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
+        const y = pad + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
+        trendPlotPoints.push({ x, y, p });
+        if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      // Draw point markers so single-point data is still visible.
+      ctx.fillStyle = brand;
+      points.forEach((p) => {
+        const x = pad + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
+        const y = pad + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
+        ctx.beginPath();
+        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      ctx.fillStyle = text;
+      ctx.fillText(`min: ${minV.toFixed(2)}`, pad + 8, pad + h - 8);
+      ctx.fillText(`max: ${maxV.toFixed(2)}`, pad + 8, pad + 14);
+      ctx.fillText(title || '', pad + 120, pad + 14);
+      if (points.length) {
+        const startLabel = points[0].label || '';
+        const endLabel = points[points.length - 1].label || '';
+        ctx.fillText(startLabel, pad, pad + h + 18);
+        const endWidth = ctx.measureText(endLabel).width;
+        ctx.fillText(endLabel, pad + w - endWidth, pad + h + 18);
+      }
+    }
+
+    function renderObservationTable(rows) {
+      const body = document.getElementById('obs-body');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="5" class="empty">暂无采集数据</td></tr>';
+        return;
+      }
+      body.innerHTML = '';
+      const top = rows.slice().reverse().slice(0, 200);
+      for (const r of top) {
+        const delta = r.delta_from_prev;
+        let deltaText = '-';
+        let deltaCls = 'delta-flat';
+        if (typeof delta === 'number') {
+          if (delta > 0) {
+            deltaText = `+${delta.toFixed(2)}`;
+            deltaCls = 'delta-up';
+          } else if (delta < 0) {
+            deltaText = `${delta.toFixed(2)}`;
+            deltaCls = 'delta-down';
+          } else {
+            deltaText = '0.00';
+          }
+        }
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.index ?? '-'}</td>
+          <td>${escapeHtml(r.item_name || '-')}</td>
+          <td>${escapeHtml(r.captured_at || '-')}</td>
+          <td>${typeof r.price === 'number' ? r.price.toFixed(2) : '-'}</td>
+          <td class="${deltaCls}">${deltaText}</td>
+        `;
+        body.appendChild(tr);
+      }
+    }
+
+    function buildPointsFromObservations(rows) {
+      const points = [];
+      for (const r of rows || []) {
+        if (typeof r.price !== 'number' || !r.captured_at) continue;
+        const ts = Date.parse(r.captured_at) || 0;
+        if (!ts) continue;
+        const d = new Date(ts);
+        const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        points.push({ ts, value: r.price, label, rawTime: r.captured_at });
+      }
+      points.sort((a, b) => a.ts - b.ts);
+      return points;
+    }
+
+    async function loadDetail() {
+      const windowDays = document.getElementById('window-select').value;
+      if (!activeMonitorId) {
+        drawLine([], '');
+        document.getElementById('obs-body').innerHTML = '<tr><td colspan="5" class="empty">暂无可用追踪商品</td></tr>';
+        document.getElementById('right-title').textContent = '价格趋势详情';
+        return;
+      }
+      const current = monitors.find((m) => m.monitor_id === activeMonitorId);
+      document.getElementById('right-title').textContent = `${current?.keyword || '未命名商品'} 价格趋势`;
+      const [tsRes, obsRes] = await Promise.all([
+        fetch(`/api/v1/public/monitoring/${activeMonitorId}/timeseries?window_days=${windowDays}`),
+        fetch(`/api/v1/public/monitoring/${activeMonitorId}/observations?limit=500`),
+      ]);
+      if (!tsRes.ok) throw new Error(`timeseries HTTP ${tsRes.status}`);
+      if (!obsRes.ok) throw new Error(`observations HTTP ${obsRes.status}`);
+      const ts = await tsRes.json();
+      const obs = await obsRes.json();
+      const obsRows = Array.isArray(obs.rows) ? obs.rows : [];
+      let pts = buildPointsFromObservations(obsRows);
+      if (!pts.length && Array.isArray(ts.points) && ts.points.length) {
+        pts = ts.points
+          .filter((x) => typeof x.avg_price === 'number' && x.date)
+          .map((x) => {
+            const ts2 = Date.parse(String(x.date) + 'T00:00:00') || 0;
+            return { ts: ts2, value: x.avg_price, label: String(x.date).slice(5), rawTime: String(x.date) };
+          })
+          .sort((a, b) => a.ts - b.ts);
+      }
+      drawLine(pts, `${current?.keyword || ''}（近${windowDays}天）`);
+      renderObservationTable(obsRows);
+    }
+
+    function setupChartHover() {
+      const canvas = document.getElementById('trend-canvas');
+      const tooltip = document.getElementById('chart-tooltip');
+      if (!canvas || !tooltip) return;
+      canvas.addEventListener('mousemove', (ev) => {
+        if (!trendPlotPoints.length) {
+          tooltip.style.display = 'none';
+          return;
+        }
+        const rect = canvas.getBoundingClientRect();
+        const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
+        const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+        let nearest = null;
+        let minDist = Number.POSITIVE_INFINITY;
+        for (const item of trendPlotPoints) {
+          const dx = item.x - x;
+          const dy = item.y - y;
+          const dist = dx * dx + dy * dy;
+          if (dist < minDist) {
+            minDist = dist;
+            nearest = item;
+          }
+        }
+        if (!nearest) {
+          tooltip.style.display = 'none';
+          return;
+        }
+        const threshold = 18 * 18;
+        if (minDist > threshold) {
+          tooltip.style.display = 'none';
+          return;
+        }
+        tooltip.innerHTML = `时间：${escapeHtml(nearest.p.rawTime || nearest.p.label || '-')}<br/>价格：${Number(nearest.p.value).toFixed(2)}`;
+        tooltip.style.display = 'block';
+        tooltip.style.left = `${nearest.x + 16}px`;
+        tooltip.style.top = `${Math.max(8, nearest.y - 10)}px`;
+      });
+      canvas.addEventListener('mouseleave', () => {
+        tooltip.style.display = 'none';
+      });
+    }
+
+    document.getElementById('refresh-list-btn').addEventListener('click', async () => {
+      await loadMonitors();
+      await loadDetail();
+    });
+    document.getElementById('refresh-detail-btn').addEventListener('click', loadDetail);
+    document.getElementById('window-select').addEventListener('change', loadDetail);
+    document.getElementById('monitor-search').addEventListener('input', renderMonitorList);
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      loadDetail();
+    }
+    function setupDarkMode() {
+      if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark');
+    }
+    (async () => {
+      try {
+        setupDarkMode();
+        setupChartHover();
+        await loadMonitors();
+        await loadDetail();
+      } catch (e) {
+        document.getElementById('obs-body').innerHTML = `<tr><td colspan="5" class="empty">加载失败：${escapeHtml(e?.message || '未知错误')}</td></tr>`;
+      }
+    })();
+  </script>
+</body>
+</html>
+"""
+    )
 
 
-@app.get("/keyword-tracking", summary="关键词追踪页面")
+@app.get("/keyword-tracking", summary="监测参数页面")
 def keyword_tracking_page() -> HTMLResponse:
-    return _coming_soon_page("关键词追踪", active_nav_key="keyword")
+    return HTMLResponse(
+        """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>监测参数</title>
+  <style>
+    :root {
+      --bg: #f7f8fb; --surface: #ffffff; --surface-2: #f1f3f7; --text: #1f2937;
+      --muted: #6b7280; --line: #d8dee8; --brand: #0b4fa3; --header: #0a2f66; --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218; --surface: #171c25; --surface-2: #202735; --text: #e6edf7;
+      --muted: #9fb0c9; --line: #2c3444; --brand: #66a3ff; --header: #101624; --header-text: #f3f6fd;
+    }
+    body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--text); }
+    .wrap { width:min(1200px, 100% - 24px); margin:0 auto; }
+    .topbar { background:var(--header); color:var(--header-text); border-bottom: 1px solid rgba(255,255,255,0.15); }
+    .topbar-inner { display:flex; align-items:center; justify-content:space-between; padding:12px 0; }
+    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+    .top-actions button { border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08); color:var(--header-text); padding:7px 12px; border-radius:12px; cursor:pointer; font-size:14px; }
+    .nav { background:var(--surface); border-bottom:1px solid var(--line); }
+    .nav ul { list-style:none; margin:0; padding:0; display:flex; gap:18px; overflow-x:auto; white-space:nowrap; }
+    .nav li, .nav a { padding:12px 0; border-bottom:2px solid transparent; cursor:pointer; color:inherit; display:inline-block; text-decoration:none; }
+    .nav li.active { border-color:var(--brand); color:var(--brand); font-weight:600; }
+    h1 { margin:18px 0 8px; color:var(--brand); }
+    .muted { color:var(--muted); }
+    table { width:100%; border-collapse: collapse; background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; margin: 12px 0 24px; }
+    th, td { padding:10px; border-bottom:1px solid var(--line); text-align:left; font-size:14px; }
+    th { background:var(--surface-2); }
+    .ok { color:#127a38; font-weight:700; }
+    .warn { color:#9a6700; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="top-actions">
+        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button onclick="location.href='/docs'">接口文档</button>
+      </div>
+    </div>
+  </div>
+  <div class="nav">
+    <div class="wrap">
+      <ul id="category-nav">
+        <li><a href="/">门户首页</a></li>
+        <li><a href="/?page=news">新闻动态</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
+        <li><a href="/price-trend">价格趋势</a></li>
+        <li class="active"><a href="/keyword-tracking">监测参数</a></li>
+      </ul>
+    </div>
+  </div>
+  <div class="wrap">
+    <h1>监测参数</h1>
+    <div class="muted">本页汇总监测参数与健康状态：monitor 覆盖度、URL 数量、观测与最近采样。</div>
+    <table>
+      <thead>
+        <tr>
+          <th>关键词</th>
+          <th>monitor_id</th>
+          <th>cadence</th>
+          <th>URL数</th>
+          <th>观测数</th>
+          <th>最近采样</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody id="tbody">
+        <tr><td colspan="7" class="muted">加载中...</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <script>
+    async function loadMonitors() {
+      const body = document.getElementById('tbody');
+      try {
+        const res = await fetch('/api/v1/public/monitoring/monitors');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arr = await res.json();
+        if (!Array.isArray(arr) || !arr.length) {
+          body.innerHTML = '<tr><td colspan="7" class="muted">暂无关键词监测任务。</td></tr>';
+          return;
+        }
+        body.innerHTML = '';
+        for (const m of arr) {
+          const healthy = (m.url_count || 0) > 0 && (m.observation_count || 0) > 0;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${m.keyword || '-'}</td>
+            <td>${m.monitor_id || '-'}</td>
+            <td>${m.cadence || '-'}</td>
+            <td>${m.url_count || 0}</td>
+            <td>${m.observation_count || 0}</td>
+            <td>${m.last_captured_at || '-'}</td>
+            <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待采样'}</td>
+          `;
+          body.appendChild(tr);
+        }
+      } catch (e) {
+        body.innerHTML = `<tr><td colspan="7" class="muted">加载失败：${e?.message || '未知错误'}</td></tr>`;
+      }
+    }
+    function toggleDarkMode() {
+      document.body.classList.toggle('dark');
+      localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+    }
+    function setupDarkMode() {
+      if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark');
+    }
+    setupDarkMode();
+    loadMonitors();
+  </script>
+</body>
+</html>
+"""
+    )
 
 
 @app.get("/healthz", summary="健康检查", description="用于检测服务是否存活。")

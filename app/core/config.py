@@ -18,6 +18,9 @@ class Settings(BaseSettings):
     # Optional PostgreSQL DSN dedicated to keyword monitoring.
     # Example: postgresql://openclaw_monitor:password@127.0.0.1:5432/openclaw_monitor
     monitoring_database_url: str | None = Field(default=None)
+    # Optional PostgreSQL DSN dedicated to news library storage.
+    # Example: postgresql://openclaw_news:password@127.0.0.1:5432/openclaw_news
+    news_database_url: str | None = Field(default=None)
     # Internal scheduler for periodic monitoring run-once jobs.
     monitoring_scheduler_enabled: bool = Field(default=False)
     monitoring_scheduler_monitor_id: str | None = Field(default=None)

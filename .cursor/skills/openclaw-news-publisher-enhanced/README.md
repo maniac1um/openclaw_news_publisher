@@ -63,7 +63,7 @@ python tools/cli.py stats
 如果你已经在主项目中创建了 `monitor_id`，可以直接启用 OpenClaw 内置 scheduler（不需要 cron/systemd）：
 
 ```bash
-export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:Openclaw123@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'

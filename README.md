@@ -331,7 +331,7 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/summary?window_days=7
 你可以让监测任务直接在 OpenClaw 进程内部周期执行：
 
 ```bash
-export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:Openclaw123@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'

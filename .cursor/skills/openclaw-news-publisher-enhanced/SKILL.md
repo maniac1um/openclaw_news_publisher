@@ -434,7 +434,7 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/summary?window_days=
 当你不想依赖 cron/systemd 时，可直接启用内置 scheduler，让 OpenClaw 按固定间隔自动执行 `run-once`：
 
 ```bash
-export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:Openclaw123@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'

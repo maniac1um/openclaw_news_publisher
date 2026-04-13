@@ -1,5 +1,6 @@
 import base64
 import json
+import os
 import subprocess
 import tempfile
 import time
@@ -71,7 +72,10 @@ async def stream_openclaw_reply(
     - Throttle client pushes: aggregate and send updates every `flush_interval_seconds`.
     """
 
-    openclaw_state_dir = Path("/home/maniac1um/.openclaw")
+    # 勿硬编码本机用户名；公开仓库可配合 OPENCLAW_STATE_DIR 覆盖
+    openclaw_state_dir = Path(
+        os.environ.get("OPENCLAW_STATE_DIR", str(Path.home() / ".openclaw"))
+    )
     openclaw_json_path = openclaw_state_dir / "openclaw.json"
     device_auth_path = openclaw_state_dir / "identity" / "device.json"
     paired_devices_path = openclaw_state_dir / "devices" / "paired.json"

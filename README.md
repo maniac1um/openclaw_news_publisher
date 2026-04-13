@@ -15,16 +15,23 @@
   - `POST /api/v1/openclaw/reports`
   - `GET /api/v1/openclaw/reports/{ingest_id}`
   - `POST /api/v1/openclaw/reports/{ingest_id}/retry`（预留）
-  - 价格监测（MVP）
-    - `POST /api/v1/openclaw/monitoring/bootstrap`
-    - `POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
-    - `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
-    - `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
+  - 价格监测（默认由 OpenClaw 外采，服务端只入库与查询）
+    - `POST /api/v1/openclaw/monitoring/bootstrap`（默认仅建任务 + 占位 URL，不生成大量候选抓取链）
+    - `POST /api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`（OpenClaw 上报解析后的价格观测）
+    - `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`（需 API Key）
+    - `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`（可选，补充参考 URL）
+    - `POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`（仅当开启服务端抓取时才会外网拉页；默认跳过）
     - `GET /api/v1/openclaw/monitoring/scheduler/status`
     - `POST /api/v1/openclaw/monitoring/external-heartbeat`（外部 cron/scheduler 心跳上报）
+  - 价格监测公开读（供 OpenClaw 定时拉库、前端展示，无需 API Key）
+    - `GET /api/v1/public/monitoring/monitors`
+    - `GET /api/v1/public/monitoring/{monitor_id}/timeseries`
+    - `GET /api/v1/public/monitoring/{monitor_id}/observations`
 - OpenClaw 门户聊天（FastAPI WebSocket）
   - 首页聊天框：OpenClaw 回复在左侧气泡、用户消息在右侧气泡实时展示
   - 中转接口：`WS /api/v1/chat/ws`（服务端连接 OpenClaw Gateway，并将流式增量内容按 `200ms` 聚合后推送前端）
+  - 会话在浏览器本地持久化（`localStorage`）：刷新/切页可恢复，支持“删除当前会话”和“清空缓存”
+  - 当前为单设备本地持久化；多设备同步建议见 `docs/architecture/news-pipeline.md`（对话持久化演进）
 - 用户页面与公开查询 API
   - `/`（新闻动态：首页报告列表 + Markdown 详情）
   - `/topic-analysis`（专题分析：开发中）
@@ -70,7 +77,7 @@ openclaw_news_publisher/
 │     ├─ raw/
 │     └─ rendered/
 ├─ docs/
-│  ├─ api/openclaw-intake.md
+│  ├─ api/openclaw-intake.md（报告入站 + 价格监测 ingest 约定）
 │  ├─ architecture/news-pipeline.md
 │  └─ cross-platform-development.md
 ├─ scripts/publish_site.py
@@ -208,7 +215,8 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
 - `OPENCLAW_DATABASE_URL`（可选；配置后启用 PostgreSQL 存储）
 - `OPENCLAW_MONITORING_DATABASE_URL`（可选；配置后启用 PostgreSQL 价格监测存储）
-- `OPENCLAW_MONITORING_SCHEDULER_ENABLED`（默认 `false`，开启内部监测定时任务）
+- `OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE`（默认 `false`：**不在服务端**对监测 URL 做 HTTP 抓取；由 OpenClaw 采集后 `POST .../observations/ingest`。设为 `true` 可恢复旧版 `bootstrap` 批量候选 URL + `run-once` 服务端抓取）
+- `OPENCLAW_MONITORING_SCHEDULER_ENABLED`（默认 `false`；仅当同时 `OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true` 时进程内 scheduler 才会真正启动抓取任务）
 - `OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID`（内部定时任务绑定的 monitor_id）
 - `OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES`（默认 `1440`）
 - `OPENCLAW_MONITORING_SCHEDULER_RUN_ON_START`（默认 `false`，启动后是否立即跑一次）
@@ -263,50 +271,87 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - `published`
 - `failed`
 
-## 价格监测（MVP）
+## 价格监测（默认：OpenClaw 采集，服务端入库）
 
 当你配置了 `OPENCLAW_MONITORING_DATABASE_URL` 后，即可使用价格监测接口（表结构由服务端自动创建）。
 
-请求头：同样需要 `X-Api-Key`。
+**默认行为**（`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE` 未设置或为 `false`）：
 
-### 1) 创建监测并自动生成候选 URL
+- 服务端 **不会** 对公网 URL 发起监测抓取。
+- `bootstrap` 只创建 `monitor_id` 与 **一条占位 URL**（满足库表外键）；**真实价格**由 OpenClaw（或你的采集脚本）解析后，通过 **`POST .../observations/ingest`** 写入 `price_observations`。
+- OpenClaw 可定时 **`GET /api/v1/public/monitoring/...`** 读取已入库的时序与观测，用于生成报告后再 **`POST /api/v1/openclaw/reports`**。
+
+请求头（除公开 GET 外）：`X-Api-Key`。
+
+### 1) 创建监测任务（默认模式）
 
 `POST /api/v1/openclaw/monitoring/bootstrap`
 
-请求体：
+请求体（字段仍可传入；在默认模式下 `candidate_count` / `platforms` / `source_profile` **不**用于生成大量候选抓取 URL，仅保留关键词与 `cadence` 等元数据）：
 
 ```json
 {
   "keyword": "羽毛球价格",
   "candidate_count": 20,
   "platforms": ["taobao", "tmall", "jd", "news"],
+  "source_profile": "auto",
   "cadence": "daily"
 }
 ```
 
-返回示例：
+若将 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`**，`bootstrap` 会恢复为「按关键词自动生成多条候选 URL」：`source_profile` 为 `auto`（按关键词推断）、`ecommerce` 或 `commodity`（大宗商品候选以国内可访问的财经/上金所等为主）。
+
+返回示例（默认模式常见为 1 条占位 URL）：
 
 ```json
 {
   "monitor_id": "xxxx-xxxx-xxxx-xxxx",
-  "inserted_urls": 20,
-  "urls": ["https://..."]
+  "inserted_urls": 1,
+  "urls": ["https://openclaw.internal/ingest"]
 }
 ```
 
-### 2) 执行一次采样并写入 observations
+### 2) OpenClaw 上报一条价格观测（推荐主路径）
 
-`POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
+`POST /api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`
 
-### 3) 查询最近窗口期摘要
+请求体示例：
+
+```json
+{
+  "price": 523.4,
+  "title": "页面标题或数据源说明",
+  "currency": "CNY",
+  "captured_at": "2026-04-10T12:00:00+08:00",
+  "source_url": "https://example.com/quote",
+  "raw_payload": { "vendor": "example" }
+}
+```
+
+- `price` 必填；`captured_at` 可省略（使用服务器当前时间）。
+
+### 3) 查询最近窗口期摘要（需 API Key）
 
 `GET /api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
 
-### 4) 可选：追加“商品详情页”URL（提高价格提取命中率）
+### 4) 公开读库（OpenClaw 定时拉取、无需 API Key）
+
+- `GET /api/v1/public/monitoring/monitors`
+- `GET /api/v1/public/monitoring/{monitor_id}/timeseries?window_days=30`
+- `GET /api/v1/public/monitoring/{monitor_id}/observations?limit=200`
+
+### 5) 可选：追加参考 URL（不自动触发服务端抓取，除非开启 `ALLOW_SERVER_SCRAPE`）
 
 `POST /api/v1/openclaw/monitoring/{monitor_id}/urls`
 
-快速调用示例（`BASE_URL` 与 `API_KEY` 按你的部署调整）：
+### 6) 服务端执行一次网页采样（仅 legacy）
+
+`POST /api/v1/openclaw/monitoring/{monitor_id}/run-once`
+
+- 默认返回 `server_scrape_skipped: true`，**不**发起外网 HTTP。
+- 仅当 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`** 且已配置可抓取的 URL 时才会按 URL 抓取并写入 observations。
+
+快速调用示例（**默认：ingest + 摘要**；`BASE_URL` 与 `API_KEY` 按你的部署调整）：
 
 ```bash
 BASE_URL="http://127.0.0.1:8000"
@@ -315,23 +360,30 @@ API_KEY="dev-openclaw-key"
 BOOT=$(curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/bootstrap" \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: $API_KEY" \
-  -d '{"keyword":"羽毛球价格","candidate_count":20,"platforms":["taobao","tmall","jd"],"cadence":"daily"}')
+  -d '{"keyword":"羽毛球价格","cadence":"daily"}')
 
 MONITOR_ID=$(python3 -c "import sys,json; print(json.loads(sys.stdin.read())['monitor_id'])" <<< "$BOOT")
 
-curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/run-once" \
-  -H "X-Api-Key: $API_KEY"
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/observations/ingest" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $API_KEY" \
+  -d '{"price":89.9,"currency":"CNY","title":"示例观测","source_url":"https://example.com/p"}'
+
+curl -sS "$BASE_URL/api/v1/public/monitoring/$MONITOR_ID/observations?limit=50"
 
 curl -sS "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/summary?window_days=7" \
   -H "X-Api-Key: $API_KEY"
 ```
 
-## OpenClaw 内部定时任务（无需 cron/systemd）
+## OpenClaw 内部定时任务（仅 legacy 服务端抓取）
 
-你可以让监测任务直接在 OpenClaw 进程内部周期执行：
+进程内 scheduler 会周期性调用 `run-once` 做 **HTTP 抓取**。在默认配置下 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=false`**，即使打开 `OPENCLAW_MONITORING_SCHEDULER_ENABLED`，**也不会启动**该调度器（避免空转）。
+
+若你明确需要服务端自己爬页面，可同时设置：
 
 ```bash
 export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE='true'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'
@@ -347,10 +399,11 @@ curl -sS "http://127.0.0.1:8000/api/v1/openclaw/monitoring/scheduler/status" \
   -H "X-Api-Key: dev-openclaw-key"
 ```
 
-返回字段说明：
+返回字段说明（节选）：
 - `enabled`: 是否开启内部 scheduler
 - `started`: 当前进程是否已启动 scheduler
 - `configured`: 配置是否完整（开启 + DB DSN + monitor_id）
+- `allow_server_scrape`: 是否允许服务端抓取（为 `false` 时 scheduler 不会启动）
 
 ## 外部 cron / scheduler 心跳接入（可与内部并行）
 
@@ -371,7 +424,7 @@ curl -sS "http://127.0.0.1:8000/api/v1/openclaw/monitoring/scheduler/status" \
   "job_name": "cron-monitor-hourly",
   "status": "ok",
   "monitor_id": "9551be2b-3e27-4935-a595-d1699163a3e9",
-  "message": "run-once completed"
+  "message": "observations ingest completed"
 }
 ```
 
@@ -388,14 +441,16 @@ curl -sS "http://127.0.0.1:8000/api/v1/openclaw/monitoring/scheduler/status" \
       "job_name": "cron-monitor-hourly",
       "status": "ok",
       "monitor_id": "9551be2b-3e27-4935-a595-d1699163a3e9",
-      "message": "run-once completed",
+      "message": "observations ingest completed",
       "last_seen_at": "2026-04-08T10:20:30.123456+00:00"
     }
   ]
 }
 ```
 
-### 3) cron 示例（先执行 run-once，再上报 heartbeat）
+### 3) cron 示例（OpenClaw 侧采集后 ingest，再上报 heartbeat）
+
+默认部署下 **`run-once` 不会抓取**。推荐在外部任务里完成页面拉取与价格解析，再调用 **`observations/ingest`**，并上报心跳：
 
 ```bash
 #!/usr/bin/env bash
@@ -404,15 +459,22 @@ set -euo pipefail
 BASE_URL="http://127.0.0.1:8000"
 API_KEY="dev-openclaw-key"
 MONITOR_ID="9551be2b-3e27-4935-a595-d1699163a3e9"
-JOB_NAME="cron-monitor-hourly"
+JOB_NAME="openclaw-price-ingest-hourly"
 
-if curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/run-once" \
-  -H "X-Api-Key: $API_KEY" >/dev/null; then
+# 此处省略：你的采集逻辑得到 PRICE / TITLE / SOURCE_URL
+PRICE="523.4"
+TITLE="cron sample"
+SOURCE_URL="https://example.com/quote"
+
+if curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/$MONITOR_ID/observations/ingest" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: $API_KEY" \
+  -d "{\"price\":$PRICE,\"title\":\"$TITLE\",\"source_url\":\"$SOURCE_URL\",\"currency\":\"CNY\"}" >/dev/null; then
   STATUS="ok"
-  MSG="run-once completed"
+  MSG="observations ingest completed"
 else
   STATUS="error"
-  MSG="run-once failed"
+  MSG="observations ingest failed"
 fi
 
 curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
@@ -420,6 +482,8 @@ curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
   -H "X-Api-Key: $API_KEY" \
   -d "{\"job_name\":\"$JOB_NAME\",\"status\":\"$STATUS\",\"monitor_id\":\"$MONITOR_ID\",\"message\":\"$MSG\"}" >/dev/null || true
 ```
+
+若已设置 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`**，可将上述 `ingest` 步骤替换为 `POST .../run-once` 作为旧版流程。
 
 ## 门户端删除接口（可复用）
 
@@ -495,6 +559,14 @@ $resp
 ```bash
 pytest -q
 ```
+
+## 门户聊天会话持久化
+
+- 当前实现：门户首页聊天会话保存在浏览器 `localStorage`，刷新页面或切换门户页面后仍可恢复会话与消息。
+- 会话管理：支持“新建会话”“删除当前会话”“清空缓存（删除全部本地会话）”。
+- 数据约束：为避免浏览器存储膨胀，前端会限制会话总数和单会话消息条数（超限自动裁剪）。
+- 边界说明：这是本地持久化，不会自动跨浏览器或跨设备同步。
+- 后续扩展：如需多设备共享，可在 PostgreSQL 中落表 `chat_sessions/chat_messages` 并增加同步 API（见 `docs/architecture/news-pipeline.md`）。
 
 ## 发布链路说明
 

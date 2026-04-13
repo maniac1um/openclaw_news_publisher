@@ -53,3 +53,35 @@
 
 - `GET /api/v1/openclaw/reports/{ingest_id}`
 - 状态枚举：`queued`、`processing`、`published`、`failed`
+
+---
+
+## 价格监测（OpenClaw 外采 + 服务端入库）
+
+与报告入站相同前缀下的监测路由均在 **`/api/v1/openclaw/monitoring/...`**。完整说明与 curl 示例见仓库根目录 [README.md](../../README.md) 中的「价格监测」章节。
+
+### 设计约定
+
+- 默认 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=false`**：服务端不对监测 URL 做公网 HTTP 抓取；由 OpenClaw 完成采集与解析后 **`POST /api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`** 写入 `price_observations`。
+- **`POST .../monitoring/bootstrap`**：默认仅创建监测任务并插入一条占位 URL；`candidate_count` / `platforms` / `source_profile` 仅在开启服务端抓取时用于生成候选 URL。
+- **`POST .../monitoring/{monitor_id}/run-once`**：默认返回 `server_scrape_skipped: true`；仅当 `OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true` 时执行 legacy 网页抓取。
+- **只读拉库**（无需 `X-Api-Key`）：`GET /api/v1/public/monitoring/monitors`、`GET .../timeseries`、`GET .../observations`，供 OpenClaw 定时读取已存数据以生成报告或再 **`POST /api/v1/openclaw/reports`**。
+
+### 鉴权
+
+除上述 `public/monitoring` GET 外，监测写入与 `summary` 等接口均需请求头 **`X-Api-Key`**（与报告入站一致）。
+
+### 观测入库请求体（ingest）
+
+```json
+{
+  "price": 523.4,
+  "title": "可选",
+  "currency": "CNY",
+  "captured_at": "2026-04-10T12:00:00+08:00",
+  "source_url": "https://example.com/quote",
+  "raw_payload": {}
+}
+```
+
+- `price` 必填；`captured_at` 可省略。

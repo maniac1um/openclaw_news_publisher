@@ -14,8 +14,10 @@ class MonitoringScheduler:
         monitor_id: str,
         interval_minutes: int,
         run_on_start: bool = False,
+        *,
+        allow_server_scrape: bool = False,
     ) -> None:
-        self._service = MonitoringService(database_url)
+        self._service = MonitoringService(database_url, allow_server_scrape=allow_server_scrape)
         self._monitor_id = monitor_id
         self._interval_seconds = max(1, interval_minutes) * 60
         self._run_on_start = run_on_start

@@ -109,7 +109,7 @@ curl -sS "$BASE_URL/api/v1/public/news/library?keyword=%E6%AF%94%E7%89%B9%E5%B8%
 
 ## 与价格分析技能联动（关键新增）
 
-当用户希望“抓到新新闻后快速给出价格判断”时，本技能负责提供触发输入，交由 `openclaw-price-analysis-reporting` 执行联合分析。
+当用户希望“抓到新新闻后快速给出价格判断”时，本技能负责提供触发输入，交由 `openclaw-price-analysis-reporting` 执行联合分析。价格时间序列默认来自 **OpenClaw 上报** 的 `observations/ingest` 与公开 **`GET /api/v1/public/monitoring/...`** 读库，而非服务端网页抓取（参见主项目 `README.md` 与 `openclaw-news-publisher-enhanced` 的 §8.6）。
 
 ### 联动触发条件
 

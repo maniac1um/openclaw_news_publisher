@@ -2,6 +2,7 @@
 name: openclaw-news-publisher
 description: >
   按关键词抓取或整理新闻、生成符合 schema 的报告 JSON，调用 OpenClaw News Publisher 入站 API（POST）并轮询状态；
+  价格监测默认由 OpenClaw 侧采集后 POST observations/ingest 入库，服务端不抓网页；可定时 GET public/monitoring 读库。
   可选使用本包内白名单 CLI 与预设种子库发现/维护新闻源。在用户要求爬新闻、出趋势报告并发布到发布服务时使用。
 ---
 
@@ -373,19 +374,23 @@ curl -sS -X POST "${BASE_URL}/api/v1/openclaw/reports" \
 
 - `POST {BASE_URL}/api/v1/openclaw/reports/{ingest_id}/retry` 在参考实现中可能返回 **501**；不要依赖其实现，失败时优先联系用户或修正 JSON 后**新任务**重提。
 
-### 8.6 价格监测 HTTP 接口（MVP）
+### 8.6 价格监测 HTTP 接口（默认：OpenClaw 采集，服务端入库）
 
 **前缀**：以下路径均相对于 `{BASE_URL}`（已含 `/api/v1` 的部署以实际为准）。
 
 **前置条件**：
-- 运行 OpenClaw 服务时需要配置 `OPENCLAW_MONITORING_DATABASE_URL`，用于写入 `price_monitors / price_monitor_urls / price_observations`。
-- 认证：请求头 `X-Api-Key: <与部署 OPENCLAW_OPENCLAW_API_KEY 一致>`。
+- 部署需配置 `OPENCLAW_MONITORING_DATABASE_URL`，用于 `price_monitors / price_monitor_urls / price_observations`。
+- 写入类接口（除 **public** GET 外）：请求头 `X-Api-Key: <与部署 OPENCLAW_OPENCLAW_API_KEY 一致>`。
 
-#### 8.6.1 创建监测并自动生成候选 URL
+**环境变量（必读）**：
+- **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE`**（默认 `false`）：为 `false` 时，服务端 **不对** 监测 URL 做公网 HTTP 抓取；`bootstrap` 仅建任务 + 一条占位 URL；价格由 OpenClaw **`POST .../observations/ingest`** 写入。设为 `true` 可恢复旧版：`bootstrap` 生成多条候选 URL，且 **`run-once`** 会抓取页面。
+- **`OPENCLAW_MONITORING_SCHEDULER_ENABLED`**：进程内定时器只会调用 `run-once`；在默认 `ALLOW_SERVER_SCRAPE=false` 时 **不会启动**（即使 enabled=true）。需要 legacy 服务端抓取时须同时 `ALLOW_SERVER_SCRAPE=true`。
+
+#### 8.6.1 创建监测任务（bootstrap）
 
 - **POST** `{BASE_URL}/api/v1/openclaw/monitoring/bootstrap`
 
-请求体示例：
+默认模式下请求体仍可带 `candidate_count` / `platforms` / `source_profile`，但 **不会** 用于生成大量抓取 URL（仅保留关键词、`cadence` 等）。
 
 ```json
 {
@@ -396,16 +401,41 @@ curl -sS -X POST "${BASE_URL}/api/v1/openclaw/reports" \
 }
 ```
 
-#### 8.6.2 执行一次采样并写入观测
+#### 8.6.2 上报一条价格观测（主路径，推荐）
 
-- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/run-once`
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`
 
-```bash
-curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/run-once" \
-  -H "X-Api-Key: ${API_KEY}"
+```json
+{
+  "price": 523.4,
+  "title": "可选，页面或数据源说明",
+  "currency": "CNY",
+  "captured_at": "2026-04-10T12:00:00+08:00",
+  "source_url": "https://example.com/quote",
+  "raw_payload": { "vendor": "example" }
+}
 ```
 
-#### 8.6.3 查询最近窗口期摘要
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/observations/ingest" \
+  -H "Content-Type: application/json" \
+  -H "X-Api-Key: ${API_KEY}" \
+  -d '{"price":89.9,"currency":"CNY","title":"sample","source_url":"https://example.com/p"}'
+```
+
+#### 8.6.3 公开读库（OpenClaw 定时拉取，无需 API Key）
+
+用于生成报告前读取已入库数据：
+
+- **GET** `{BASE_URL}/api/v1/public/monitoring/monitors`
+- **GET** `{BASE_URL}/api/v1/public/monitoring/{monitor_id}/timeseries?window_days=30`
+- **GET** `{BASE_URL}/api/v1/public/monitoring/{monitor_id}/observations?limit=200`
+
+```bash
+curl -sS "$BASE_URL/api/v1/public/monitoring/<monitor_id>/observations?limit=100"
+```
+
+#### 8.6.4 查询最近窗口期摘要（需 API Key）
 
 - **GET** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/summary?window_days=7`
 
@@ -414,11 +444,11 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/summary?window_days=
   -H "X-Api-Key: ${API_KEY}"
 ```
 
-#### 8.6.4 可选：追加“商品详情页”URL（提升价格提取命中率）
+#### 8.6.5 可选：追加参考 URL
 
 - **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/urls`
 
-请求体示例：
+仅在 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`** 时，`run-once` 才会对这些 URL 做服务端抓取；默认模式下追加 URL 不影响 **ingest** 主路径（ingest 使用占位 `monitor_url_id`）。
 
 ```json
 {
@@ -429,58 +459,62 @@ curl -sS "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/summary?window_days=
 }
 ```
 
-#### 8.6.5 内部定时任务（OpenClaw 进程内）
+#### 8.6.6 执行一次服务端网页采样（legacy，可选）
 
-当你不想依赖 cron/systemd 时，可直接启用内置 scheduler，让 OpenClaw 按固定间隔自动执行 `run-once`：
+- **POST** `{BASE_URL}/api/v1/openclaw/monitoring/{monitor_id}/run-once`
+
+默认响应含 **`server_scrape_skipped: true`**，不发起外网请求。仅当 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`** 且存在可抓外部链时才会抓取。
+
+```bash
+curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/<monitor_id>/run-once" \
+  -H "X-Api-Key: ${API_KEY}"
+```
+
+**质量说明（legacy 抓取）**：
+- `run-once` 为纯 HTTP（不执行 JavaScript），启发式抽价；动态站可能 `priced_observations` 为 0。
+
+#### 8.6.7 内部定时任务（仅 legacy 服务端抓取）
+
+当你需要进程内周期 **抓取**（非默认）时，须同时：
 
 ```bash
 export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE='true'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'
 export OPENCLAW_MONITORING_SCHEDULER_RUN_ON_START='true'
 ```
 
-启动服务后，scheduler 会自动在后台线程运行并在日志输出结果。
+状态查询：
 
-状态查询接口：
-
-- **GET** `{BASE_URL}/api/v1/openclaw/monitoring/scheduler/status`
+- **GET** `{BASE_URL}/api/v1/openclaw/monitoring/scheduler/status`（响应含 `allow_server_scrape`）
 
 ```bash
 curl -sS "$BASE_URL/api/v1/openclaw/monitoring/scheduler/status" \
   -H "X-Api-Key: ${API_KEY}"
 ```
 
-**质量说明（重要）**：
-- `run-once` 为纯 HTTP 抓取（不执行 JavaScript），并使用基于文本的启发式抽取价格。
-- 页面若不易识别价格（或为动态渲染），`priced_observations` 可能为 0。最有效的改善方式是：向 `/urls` 追加更“结构化”的商品详情页 URL。
+#### 8.6.8 外部 cron/scheduler 心跳上报（门户可视化）
 
-#### 8.6.6 外部 cron/scheduler 心跳上报（门户可视化）
-
-当用户采用外部调度器（如 Linux `cron` / K8s CronJob）而非进程内 scheduler 时，推荐在每次任务执行后上报心跳，供门户首页“定时任务状态”卡片展示最近状态。
+当采用外部调度器（Linux `cron` / K8s CronJob 等）执行 **采集 + ingest** 时，推荐在每次任务结束后上报心跳。
 
 - **POST** `{BASE_URL}/api/v1/openclaw/monitoring/external-heartbeat`
-- **认证**：`X-Api-Key: <与部署 OPENCLAW_OPENCLAW_API_KEY 一致>`
-- **请求体字段**：
-  - `job_name`：任务名（建议稳定不变，作为展示主键）
-  - `status`：任务状态（如 `ok` / `error`）
-  - `monitor_id`：可选，对应监测任务 ID
-  - `message`：可选，补充说明
+- **请求体字段**：`job_name`、`status`（`ok`/`error`）、可选 `monitor_id`、`message`
 
 ```bash
 curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
   -H "Content-Type: application/json" \
   -H "X-Api-Key: ${API_KEY}" \
   -d '{
-    "job_name":"cron-monitor-hourly",
+    "job_name":"openclaw-price-ingest-hourly",
     "status":"ok",
     "monitor_id":"9551be2b-3e27-4935-a595-d1699163a3e9",
-    "message":"run-once completed"
+    "message":"observations ingest completed"
   }'
 ```
 
-公开查询（门户端使用）：
+公开查询：
 
 - **GET** `{BASE_URL}/api/v1/public/monitoring/external-jobs`
 
@@ -488,10 +522,11 @@ curl -sS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
 curl -sS "$BASE_URL/api/v1/public/monitoring/external-jobs"
 ```
 
-建议流程（外部调度）：
-1. 先调用 `POST /monitoring/{monitor_id}/run-once` 执行采样。
-2. 成功/失败后都调用 `POST /monitoring/external-heartbeat` 上报状态。
-3. 首页卡片会同时显示“内部 scheduler 状态 + 外部任务最近心跳”。
+建议流程（**默认**，外部调度）：
+1. OpenClaw 侧完成页面拉取与价格解析。
+2. **`POST /monitoring/{monitor_id}/observations/ingest`** 写入观测。
+3. 成功/失败后 **`POST /monitoring/external-heartbeat`**。
+4. 需要生成报告时，**`GET /public/monitoring/...`** 拉已存数据，再按需 **`POST /openclaw/reports`**。
 
 ---
 

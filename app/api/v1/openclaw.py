@@ -8,6 +8,8 @@ from app.schemas.monitoring import (
     MonitoringAddUrlsResponse,
     MonitoringBootstrapRequest,
     MonitoringBootstrapResponse,
+    MonitoringObservationIngestRequest,
+    MonitoringObservationIngestResponse,
     MonitoringRunOnceResponse,
     MonitoringSummaryResponse,
 )
@@ -126,7 +128,11 @@ def retry_ingest(
     response_model=MonitoringBootstrapResponse,
     status_code=status.HTTP_201_CREATED,
     summary="创建关键词监测并自动生成候选 URL",
-    description="使用关键词自动生成候选 URL（淘宝/天猫/京东/资讯），并写入监测数据库。",
+    description=(
+        "默认（OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=false）仅创建监测任务并写入一条占位 URL，"
+        "由 OpenClaw 采集后 POST observations/ingest 入库；"
+        "若将 OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true，则按关键词推断生成候选抓取 URL（大宗商品或电商）。"
+    ),
 )
 def bootstrap_monitoring(
     payload: MonitoringBootstrapRequest,
@@ -137,13 +143,17 @@ def bootstrap_monitoring(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。",
         )
-    service = MonitoringService(settings.monitoring_database_url)
+    service = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
     service.ensure_tables()
     monitor_id, urls = service.bootstrap_monitor(
         keyword=payload.keyword,
         candidate_count=payload.candidate_count,
         platforms=payload.platforms,
         cadence=payload.cadence,
+        source_profile=payload.source_profile,
     )
     return MonitoringBootstrapResponse(
         monitor_id=monitor_id,
@@ -158,7 +168,10 @@ def bootstrap_monitoring(
     response_model=MonitoringRunOnceResponse,
     status_code=status.HTTP_200_OK,
     summary="执行一次监测采样并写入 observations",
-    description="遍历 monitor 下 URL，抓取页面标题/价格并入库 price_observations。",
+    description=(
+        "仅在 OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true 时遍历 URL 并服务端抓取；"
+        "否则返回 server_scrape_skipped=true，不发起外网请求（请用 observations/ingest）。"
+    ),
 )
 def run_monitoring_once(
     monitor_id: str,
@@ -169,13 +182,53 @@ def run_monitoring_once(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。",
         )
-    service = MonitoringService(settings.monitoring_database_url)
+    service = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
     service.ensure_tables()
     try:
         result = service.run_once(monitor_id=monitor_id)
     except KeyError:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
     return MonitoringRunOnceResponse(**result)
+
+
+@router.post(
+    "/monitoring/{monitor_id}/observations/ingest",
+    response_model=MonitoringObservationIngestResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="OpenClaw 上报一条价格观测并入库",
+    description="将 OpenClaw 已解析的价格写入 price_observations；无需服务端抓取页面。",
+)
+def ingest_monitoring_observation(
+    monitor_id: str,
+    payload: MonitoringObservationIngestRequest,
+    _: None = Depends(verify_api_key),
+) -> MonitoringObservationIngestResponse:
+    if not settings.monitoring_database_url:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。",
+        )
+    service = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
+    service.ensure_tables()
+    try:
+        result = service.ingest_openclaw_observation(
+            monitor_id,
+            price=payload.price,
+            title=payload.title,
+            currency=payload.currency,
+            captured_at=payload.captured_at,
+            source_url=payload.source_url,
+            raw_payload=payload.raw_payload,
+        )
+    except KeyError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Monitor not found")
+    return MonitoringObservationIngestResponse(**result)
 
 
 @router.get(
@@ -195,7 +248,10 @@ def get_monitoring_summary(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。",
         )
-    service = MonitoringService(settings.monitoring_database_url)
+    service = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
     service.ensure_tables()
     try:
         result = service.get_summary(monitor_id=monitor_id, window_days=window_days)
@@ -221,7 +277,10 @@ def add_monitoring_urls(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。",
         )
-    service = MonitoringService(settings.monitoring_database_url)
+    service = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
     service.ensure_tables()
     try:
         inserted = service.add_urls(monitor_id=monitor_id, urls=payload.urls, platform=payload.platform)
@@ -252,6 +311,7 @@ def get_monitoring_scheduler_status(
         "interval_minutes": settings.monitoring_scheduler_interval_minutes,
         "run_on_start": settings.monitoring_scheduler_run_on_start,
         "has_monitoring_database_url": has_db,
+        "allow_server_scrape": settings.monitoring_allow_server_scrape,
     }
 
 

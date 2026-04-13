@@ -38,3 +38,22 @@ def test_extract_price_platform_specific_candidates() -> None:
     price, candidates = MonitoringService._extract_price(html, platform="taobao")
     assert price == 129.0
     assert 129.0 in candidates
+
+
+def test_infer_source_profile_gold_uses_commodity() -> None:
+    assert MonitoringService.infer_source_profile("黄金价格") == "commodity"
+    assert MonitoringService.infer_source_profile("羽毛球价格") == "ecommerce"
+
+
+def test_commodity_urls_exclude_ecommerce_hosts() -> None:
+    urls = MonitoringService.generate_commodity_candidate_urls(keyword="黄金价格", count=12)
+    assert len(urls) == 12
+    joined = " ".join(u for _, u in urls)
+    assert "jd.com" not in joined
+    assert "taobao.com" not in joined
+    assert "yahoo.com" not in joined
+    assert "marketwatch.com" not in joined
+    assert "investing.com" not in joined
+    assert any("eastmoney.com" in u for _, u in urls)
+    assert any("sge.com.cn" in u for _, u in urls)
+    assert any("baidu.com" in u for _, u in urls)

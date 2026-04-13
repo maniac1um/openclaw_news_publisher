@@ -58,12 +58,23 @@ python tools/cli.py refresh
 python tools/cli.py stats
 ```
 
-## 在 OpenClaw 内快速启用价格监测定时任务
+## 价格监测：默认由 OpenClaw 入库
 
-如果你已经在主项目中创建了 `monitor_id`，可以直接启用 OpenClaw 内置 scheduler（不需要 cron/systemd）：
+主项目默认 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=false`**：服务端不抓网页。流程为：
+
+1. **`POST /api/v1/openclaw/monitoring/bootstrap`** 得到 `monitor_id`；
+2. 在 OpenClaw 或 cron 中采集并解析价格后，**`POST /api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`**；
+3. 定时 **`GET /api/v1/public/monitoring/{monitor_id}/observations`**（或 `timeseries`）读库；需要发布时再 **`POST /api/v1/openclaw/reports`**。
+
+详见同目录 **`SKILL.md` §8.6** 与仓库根目录 `README.md`「价格监测」章节。
+
+## 在 OpenClaw 进程内启用 legacy 抓取调度（可选）
+
+仅当你显式需要服务端 **`run-once` 爬页面** 时，在设置 `OPENCLAW_MONITORING_SCHEDULER_*` 的同时必须 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`**，否则调度器不会启动：
 
 ```bash
 export OPENCLAW_MONITORING_DATABASE_URL='postgresql://openclaw_monitor:<请替换密码>@127.0.0.1:5432/openclaw_monitor'
+export OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE='true'
 export OPENCLAW_MONITORING_SCHEDULER_ENABLED='true'
 export OPENCLAW_MONITORING_SCHEDULER_MONITOR_ID='<monitor_id>'
 export OPENCLAW_MONITORING_SCHEDULER_INTERVAL_MINUTES='60'

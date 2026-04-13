@@ -50,11 +50,19 @@ def _start_monitoring_scheduler() -> None:
         )
         app.state.monitoring_scheduler_started = False
         return
+    if not settings.monitoring_allow_server_scrape:
+        logging.getLogger(__name__).warning(
+            "monitoring scheduler skipped: OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE is false; "
+            "internal run-once would not fetch URLs — use OpenClaw POST observations/ingest"
+        )
+        app.state.monitoring_scheduler_started = False
+        return
     _monitoring_scheduler = MonitoringScheduler(
         database_url=settings.monitoring_database_url,
         monitor_id=settings.monitoring_scheduler_monitor_id,
         interval_minutes=settings.monitoring_scheduler_interval_minutes,
         run_on_start=settings.monitoring_scheduler_run_on_start,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
     )
     _monitoring_scheduler.start()
     app.state.monitoring_scheduler_started = True
@@ -150,7 +158,7 @@ def index(page: str | None = None) -> HTMLResponse:
 </head>
 <body>
   <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw 新闻自动化平台</div><div class="top-actions"><button onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
-  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
+  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
   <div class="wrap">
     <div class="page">
       <div class="left">
@@ -545,8 +553,8 @@ def index(page: str | None = None) -> HTMLResponse:
       <ul id="category-nav">
         <li class="active"><a href="/">门户首页</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
-        <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
@@ -565,6 +573,7 @@ def index(page: str | None = None) -> HTMLResponse:
           <select id="chat-session-select"></select>
           <button class="btn" id="chat-new-session-btn" type="button">新建会话</button>
           <button class="btn danger" id="chat-delete-session-btn" type="button">删除</button>
+          <button class="btn danger" id="chat-clear-cache-btn" type="button">清空缓存</button>
         </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-row">
@@ -787,6 +796,11 @@ def index(page: str | None = None) -> HTMLResponse:
     const chatSessionSelect = document.getElementById('chat-session-select');
     const chatNewSessionBtn = document.getElementById('chat-new-session-btn');
     const chatDeleteSessionBtn = document.getElementById('chat-delete-session-btn');
+    const chatClearCacheBtn = document.getElementById('chat-clear-cache-btn');
+
+    const CHAT_STORAGE_KEY = 'oc_portal_chat_v1';
+    const MAX_CHAT_SESSIONS = 20;
+    const MAX_MESSAGES_PER_SESSION = 200;
 
     let chatWs = null;
     // Whether the backend is currently streaming a reply for SOME session.
@@ -801,6 +815,113 @@ def index(page: str | None = None) -> HTMLResponse:
     let activeSessionKey = null;
     let activeAssistantBubble = null;
     let nextSessionNum = 1;
+
+    function _toSafeText(v) {
+      if (typeof v !== 'string') return '';
+      return v.slice(0, 4000);
+    }
+
+    function _normalizeMessages(arr) {
+      if (!Array.isArray(arr)) return [];
+      const out = [];
+      for (const item of arr) {
+        if (!item || (item.side !== 'user' && item.side !== 'assistant')) continue;
+        const text = _toSafeText(item.text || '');
+        out.push({ side: item.side, text });
+      }
+      return out.slice(-MAX_MESSAGES_PER_SESSION);
+    }
+
+    function _normalizeSession(raw, fallbackId) {
+      const id = _toSafeText(raw?.id || fallbackId || '').trim() || genSessionKey();
+      const title = _toSafeText(raw?.title || id).trim() || id;
+      const messages = _normalizeMessages(raw?.messages);
+      const idxRaw = Number(raw?.assistantIndex);
+      const assistantIndex = Number.isInteger(idxRaw) && idxRaw >= 0 && idxRaw < messages.length ? idxRaw : null;
+      return { id, title, messages, assistantIndex, assistantBubbleEl: null };
+    }
+
+    function _trimSessionsInPlace() {
+      const uniqOrder = [];
+      const seen = new Set();
+      for (const id of sessionOrder) {
+        if (!sessions[id] || seen.has(id)) continue;
+        seen.add(id);
+        uniqOrder.push(id);
+      }
+      sessionOrder = uniqOrder.slice(0, MAX_CHAT_SESSIONS);
+      const keep = new Set(sessionOrder);
+      for (const id of Object.keys(sessions)) {
+        if (!keep.has(id)) delete sessions[id];
+      }
+      for (const id of sessionOrder) {
+        sessions[id].messages = _normalizeMessages(sessions[id].messages);
+        const idxRaw = Number(sessions[id].assistantIndex);
+        sessions[id].assistantIndex = Number.isInteger(idxRaw) && idxRaw >= 0 && idxRaw < sessions[id].messages.length
+          ? idxRaw
+          : null;
+      }
+      if (!activeSessionKey || !sessions[activeSessionKey]) {
+        activeSessionKey = sessionOrder[0] || null;
+      }
+    }
+
+    function saveChatState() {
+      try {
+        _trimSessionsInPlace();
+        const payload = {
+          version: 1,
+          nextSessionNum,
+          activeSessionKey,
+          sessionOrder,
+          sessions: {},
+        };
+        for (const id of sessionOrder) {
+          const s = sessions[id];
+          payload.sessions[id] = {
+            id: s.id,
+            title: s.title,
+            messages: s.messages,
+            assistantIndex: s.assistantIndex,
+          };
+        }
+        localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(payload));
+      } catch (e) {
+        // ignore quota/security/localStorage errors
+      }
+    }
+
+    function loadChatState() {
+      try {
+        const raw = localStorage.getItem(CHAT_STORAGE_KEY);
+        if (!raw) return false;
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') return false;
+        const parsedSessions = parsed.sessions || {};
+        const parsedOrder = Array.isArray(parsed.sessionOrder) ? parsed.sessionOrder : [];
+        const rebuilt = {};
+        const rebuiltOrder = [];
+        for (const id of parsedOrder) {
+          if (typeof id !== 'string') continue;
+          const s = _normalizeSession(parsedSessions[id], id);
+          rebuilt[s.id] = s;
+          rebuiltOrder.push(s.id);
+          if (rebuiltOrder.length >= MAX_CHAT_SESSIONS) break;
+        }
+        if (!rebuiltOrder.length) return false;
+        sessions = rebuilt;
+        sessionOrder = rebuiltOrder;
+        activeSessionKey = typeof parsed.activeSessionKey === 'string' && rebuilt[parsed.activeSessionKey]
+          ? parsed.activeSessionKey
+          : rebuiltOrder[0];
+        const n = Number(parsed.nextSessionNum);
+        nextSessionNum = Number.isInteger(n) && n > 0 ? n : (rebuiltOrder.length + 1);
+        _trimSessionsInPlace();
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
 
     function addChatRow(side, text) {
       const row = document.createElement('div');
@@ -874,8 +995,10 @@ def index(page: str | None = None) -> HTMLResponse:
       };
       sessionOrder.unshift(id);
       activeSessionKey = id;
+      _trimSessionsInPlace();
       rebuildSessionSelect();
       renderActiveChat();
+      saveChatState();
       return id;
     }
 
@@ -902,6 +1025,21 @@ def index(page: str | None = None) -> HTMLResponse:
       activeSessionKey = sessionOrder[0];
       rebuildSessionSelect();
       renderActiveChat();
+      saveChatState();
+    }
+
+    function clearAllChatCache() {
+      if (isStreaming) {
+        alert('当前仍在生成中，请等待完成后再清空缓存。');
+        return;
+      }
+      if (!confirm('确认清空所有会话缓存吗？此操作不可恢复。')) return;
+      sessions = {};
+      sessionOrder = [];
+      activeSessionKey = null;
+      nextSessionNum = 1;
+      try { localStorage.removeItem(CHAT_STORAGE_KEY); } catch (e) {}
+      createSession();
     }
 
     function connectChatWs() {
@@ -940,6 +1078,7 @@ def index(page: str | None = None) -> HTMLResponse:
           if (session.assistantIndex === null) return;
           session.messages[session.assistantIndex].text = text;
           if (session.assistantBubbleEl) session.assistantBubbleEl.textContent = text;
+          saveChatState();
           if (data.done && sessionKey === serverBusySessionKey) {
             isStreaming = false;
             serverBusySessionKey = null;
@@ -954,6 +1093,7 @@ def index(page: str | None = None) -> HTMLResponse:
             session.messages[session.assistantIndex].text = errText;
           }
           if (session.assistantBubbleEl) session.assistantBubbleEl.textContent = errText;
+          saveChatState();
           if (sessionKey === serverBusySessionKey) {
             isStreaming = false;
             serverBusySessionKey = null;
@@ -973,6 +1113,7 @@ def index(page: str | None = None) -> HTMLResponse:
     chatSessionSelect.addEventListener('change', () => {
       activeSessionKey = chatSessionSelect.value;
       renderActiveChat();
+      saveChatState();
       chatInput.focus();
     });
 
@@ -983,6 +1124,11 @@ def index(page: str | None = None) -> HTMLResponse:
 
     chatDeleteSessionBtn.addEventListener('click', () => {
       deleteActiveSession();
+      chatInput.focus();
+    });
+
+    chatClearCacheBtn.addEventListener('click', () => {
+      clearAllChatCache();
       chatInput.focus();
     });
 
@@ -1005,9 +1151,11 @@ def index(page: str | None = None) -> HTMLResponse:
       const session = sessions[sessionKey];
       session.messages.push({ side: 'user', text: input });
       session.messages.push({ side: 'assistant', text: 'OpenClaw 正在生成中...' });
+      session.messages = _normalizeMessages(session.messages);
       session.assistantIndex = session.messages.length - 1;
 
       renderActiveChat();
+      saveChatState();
 
       chatWs.send(JSON.stringify({
         type: 'user_message',
@@ -1025,7 +1173,12 @@ def index(page: str | None = None) -> HTMLResponse:
       }
     });
 
-    createSession();
+    if (!loadChatState()) {
+      createSession();
+    } else {
+      rebuildSessionSelect();
+      renderActiveChat();
+    }
     connectChatWs();
 
     setupDarkMode();
@@ -1238,8 +1391,8 @@ def index(page: str | None = None) -> HTMLResponse:
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
-        <li class="active"><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
+        <li class="active"><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
@@ -1880,6 +2033,7 @@ def _monitoring_scheduler_status_public(app_obj: FastAPI) -> dict:
         "interval_minutes": settings.monitoring_scheduler_interval_minutes,
         "run_on_start": settings.monitoring_scheduler_run_on_start,
         "has_monitoring_database_url": has_db,
+        "allow_server_scrape": settings.monitoring_allow_server_scrape,
     }
 
 
@@ -2415,8 +2569,8 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
       <ul id="category-nav">
         <li{ ' class="active"' if active_nav_key == "home" else ""}><a href="/">门户首页</a></li>
         <li{ ' class="active"' if active_nav_key == "news" else ""}><a href="/?page=news">新闻动态</a></li>
-        <li{ ' class="active"' if active_nav_key == "topic" else ""}><a href="/topic-analysis">专题分析</a></li>
         <li{ ' class="active"' if active_nav_key == "price" else ""}><a href="/price-trend">价格趋势</a></li>
+        <li{ ' class="active"' if active_nav_key == "topic" else ""}><a href="/topic-analysis">专题分析</a></li>
         <li{ ' class="active"' if active_nav_key == "keyword" else ""}><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
@@ -2592,8 +2746,8 @@ def price_trend_page() -> HTMLResponse:
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
-        <li><a href="/topic-analysis">专题分析</a></li>
         <li class="active"><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
@@ -3000,15 +3154,16 @@ def keyword_tracking_page() -> HTMLResponse:
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
-        <li><a href="/topic-analysis">专题分析</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
+        <li><a href="/topic-analysis">专题分析</a></li>
         <li class="active"><a href="/keyword-tracking">监测参数</a></li>
       </ul>
     </div>
   </div>
   <div class="wrap">
     <h1>监测参数</h1>
-    <div class="muted">本页汇总监测参数与健康状态：monitor 覆盖度、URL 数量、观测与最近采样。</div>
+    <div class="muted">本页汇总价格监测与新闻监测参数：价格 monitor 覆盖度、URL/观测、最近采样；新闻按关键词聚合条目数与最近发布时间。</div>
+    <h2>价格监测任务</h2>
     <table>
       <thead>
         <tr>
@@ -3023,6 +3178,21 @@ def keyword_tracking_page() -> HTMLResponse:
       </thead>
       <tbody id="tbody">
         <tr><td colspan="7" class="muted">加载中...</td></tr>
+      </tbody>
+    </table>
+    <h2>新闻监测任务（按关键词聚合）</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>关键词</th>
+          <th>新闻条目数</th>
+          <th>最近发布时间</th>
+          <th>最近入库时间</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody id="news-tbody">
+        <tr><td colspan="5" class="muted">加载中...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3056,6 +3226,54 @@ def keyword_tracking_page() -> HTMLResponse:
         body.innerHTML = `<tr><td colspan="7" class="muted">加载失败：${e?.message || '未知错误'}</td></tr>`;
       }
     }
+    function _fmtTs(v) {
+      return v || '-';
+    }
+    async function loadNewsMonitoring() {
+      const body = document.getElementById('news-tbody');
+      try {
+        const res = await fetch('/api/v1/public/news/library?limit=500');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arr = await res.json();
+        if (!Array.isArray(arr) || !arr.length) {
+          body.innerHTML = '<tr><td colspan="5" class="muted">暂无新闻监测数据。</td></tr>';
+          return;
+        }
+        const grouped = new Map();
+        for (const item of arr) {
+          const keyword = (item.keyword || '未命名关键词').trim() || '未命名关键词';
+          const published = item.published_at || null;
+          const created = item.created_at || null;
+          if (!grouped.has(keyword)) {
+            grouped.set(keyword, { keyword, count: 0, latestPublished: null, latestCreated: null });
+          }
+          const g = grouped.get(keyword);
+          g.count += 1;
+          if (published && (!g.latestPublished || published > g.latestPublished)) g.latestPublished = published;
+          if (created && (!g.latestCreated || created > g.latestCreated)) g.latestCreated = created;
+        }
+        const rows = Array.from(grouped.values()).sort((a, b) => {
+          const ta = a.latestPublished || a.latestCreated || '';
+          const tb = b.latestPublished || b.latestCreated || '';
+          return tb.localeCompare(ta);
+        });
+        body.innerHTML = '';
+        for (const n of rows) {
+          const healthy = (n.count || 0) > 0;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${n.keyword}</td>
+            <td>${n.count || 0}</td>
+            <td>${_fmtTs(n.latestPublished)}</td>
+            <td>${_fmtTs(n.latestCreated)}</td>
+            <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待入库'}</td>
+          `;
+          body.appendChild(tr);
+        }
+      } catch (e) {
+        body.innerHTML = `<tr><td colspan="5" class="muted">加载失败：${e?.message || '未知错误'}</td></tr>`;
+      }
+    }
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
@@ -3065,6 +3283,7 @@ def keyword_tracking_page() -> HTMLResponse:
     }
     setupDarkMode();
     loadMonitors();
+    loadNewsMonitoring();
   </script>
 </body>
 </html>

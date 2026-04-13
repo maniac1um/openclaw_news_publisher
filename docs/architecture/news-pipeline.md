@@ -22,3 +22,25 @@
 
 - 原始负载（Raw）：用于追溯与回放支持。
 - 渲染负载（Rendered）：为网站渲染提供稳定数据结构。
+
+## 价格监测数据（独立库表）
+
+价格监测使用 **`OPENCLAW_MONITORING_DATABASE_URL`** 指向的库（与 `reports` 库可分离）。默认策略下服务端 **不** 对公网页面做抓取：OpenClaw 将解析后的数值通过 **`POST /api/v1/openclaw/monitoring/{monitor_id}/observations/ingest`** 写入 `price_observations`；门户与 OpenClaw 再通过 **`GET /api/v1/public/monitoring/...`** 或带 Key 的 `summary` 读取。详见根目录 [README.md](../../README.md) 与 [docs/api/openclaw-intake.md](../api/openclaw-intake.md)。
+
+## 门户对话持久化演进（规划）
+
+当前门户首页聊天先采用浏览器本地持久化（`localStorage`），解决刷新与切页后会话丢失问题，适配本地单设备使用场景。若后续升级到跨设备同步，可复用主库 `OPENCLAW_DATABASE_URL` 扩展 PostgreSQL 表与 API：
+
+- 建议表
+  - `chat_sessions(session_id UUID PRIMARY KEY, user_scope TEXT, title TEXT, created_at TIMESTAMPTZ, updated_at TIMESTAMPTZ)`
+  - `chat_messages(id BIGSERIAL PRIMARY KEY, session_id UUID REFERENCES chat_sessions(session_id) ON DELETE CASCADE, role TEXT, content TEXT, created_at TIMESTAMPTZ)`
+- 建议接口
+  - `GET /api/v1/openclaw/chat/sessions`
+  - `POST /api/v1/openclaw/chat/sessions`
+  - `GET /api/v1/openclaw/chat/sessions/{session_id}/messages`
+  - `POST /api/v1/openclaw/chat/sessions/{session_id}/messages`
+  - `DELETE /api/v1/openclaw/chat/sessions/{session_id}`（可补 `bulk-delete`）
+- 同步策略
+  - 前端优先读本地缓存实现秒开，再异步拉服务端增量；
+  - 以 `updated_at`/`created_at` 做冲突合并；
+  - 服务端支持 TTL 或归档清理策略，便于控制历史消息体量。

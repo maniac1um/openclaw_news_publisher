@@ -116,6 +116,70 @@ openclaw_news_publisher/
   - `OPENCLAW_MONITORING_DATABASE_URL`
   - `OPENCLAW_NEWS_DATABASE_URL`
 
+### 先部署 PostgreSQL（推荐）
+
+> 如果你需要报告/新闻库/价格监测持久化，请先完成本节，再执行 one-click 脚本。
+
+#### Linux（Ubuntu/Debian）示例
+
+1) 安装并启动 PostgreSQL
+
+```bash
+sudo apt update
+sudo apt install -y postgresql postgresql-contrib
+sudo systemctl enable --now postgresql
+```
+
+2) 创建 3 个角色与 3 个数据库（主库/监测库/新闻库）
+
+```bash
+sudo -u postgres psql <<'SQL'
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openclaw_app') THEN
+    CREATE ROLE openclaw_app LOGIN PASSWORD 'REPLACE_ME_APP';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openclaw_monitor') THEN
+    CREATE ROLE openclaw_monitor LOGIN PASSWORD 'REPLACE_ME_MONITOR';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'openclaw_news') THEN
+    CREATE ROLE openclaw_news LOGIN PASSWORD 'REPLACE_ME_NEWS';
+  END IF;
+END$$;
+SQL
+
+sudo -u postgres psql -c "CREATE DATABASE openclaw_app OWNER openclaw_app;"
+sudo -u postgres psql -c "CREATE DATABASE openclaw_monitor OWNER openclaw_monitor;"
+sudo -u postgres psql -c "CREATE DATABASE openclaw_news OWNER openclaw_news;"
+```
+
+3) 填写 `.env` 连接串（示例）
+
+```env
+OPENCLAW_DATABASE_URL=postgresql://openclaw_app:REPLACE_ME_APP@127.0.0.1:5432/openclaw_app
+OPENCLAW_MONITORING_DATABASE_URL=postgresql://openclaw_monitor:REPLACE_ME_MONITOR@127.0.0.1:5432/openclaw_monitor
+OPENCLAW_NEWS_DATABASE_URL=postgresql://openclaw_news:REPLACE_ME_NEWS@127.0.0.1:5432/openclaw_news
+```
+
+4) 验证数据库连通性（项目根目录）
+
+```bash
+bash scripts/local/verify-openclaw-databases.sh
+```
+
+#### Windows 示例（Docker Desktop）
+
+如果你的 Windows 本机未安装 PostgreSQL，建议先用 Docker 拉起：
+
+```powershell
+docker run --name openclaw-postgres `
+  -e POSTGRES_PASSWORD=postgres `
+  -p 5432:5432 `
+  -d postgres:16
+```
+
+然后进入容器执行与 Linux 相同的建角色/建库 SQL（或用 psql 客户端连接后执行），最后按上面的 `.env` 示例填写连接串。
+
 ### Linux 一键部署
 
 ```bash

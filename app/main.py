@@ -143,6 +143,11 @@ def index(page: str | None = None) -> HTMLResponse:
     .toolbar input, .toolbar button { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:7px 10px; border-radius:12px; }
     .toolbar button.danger { border-color:#b42318; color:#b42318; background:transparent; }
     #news-list { list-style:none; margin:0; padding:0; max-height: calc(100vh - 245px); overflow:auto; }
+    .pager { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 14px 12px; border-top:1px solid var(--line); }
+    .pager-meta { color:var(--muted); font-size:12px; }
+    .pager-actions { display:flex; gap:8px; }
+    .pager-actions button { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:6px 10px; border-radius:10px; cursor:pointer; font-size:12px; }
+    .pager-actions button:disabled { opacity:.45; cursor:not-allowed; }
     .news-item { padding:12px 14px; border-bottom:1px dashed var(--line); cursor:pointer; display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:start; }
     .news-item:hover { background:var(--surface-2); }
     .news-item.active { border-left:3px solid var(--brand); background:var(--surface-2); }
@@ -157,7 +162,7 @@ def index(page: str | None = None) -> HTMLResponse:
   </style>
 </head>
 <body>
-  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw 新闻自动化平台</div><div class="top-actions"><button onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
+  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw市场趋势自动化分析平台</div><div class="top-actions"><button onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
   <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
   <div class="wrap">
     <div class="page">
@@ -169,6 +174,13 @@ def index(page: str | None = None) -> HTMLResponse:
           <button id="delete-btn" class="danger">删除选中</button>
         </div>
         <ul id="news-list"></ul>
+        <div class="pager">
+          <div id="news-page-meta" class="pager-meta">-</div>
+          <div class="pager-actions">
+            <button id="news-prev-btn" type="button">上一页</button>
+            <button id="news-next-btn" type="button">下一页</button>
+          </div>
+        </div>
       </div>
       <div class="right">
         <h2 class="panel-title">新闻详情</h2>
@@ -180,6 +192,8 @@ def index(page: str | None = None) -> HTMLResponse:
     let newsCache = [];
     let activeId = null;
     let selectedIds = new Set();
+    let newsPage = 1;
+    const NEWS_PAGE_SIZE = 10;
     function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); }
     function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); }
     function escapeHtml(text) { return String(text ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll(\"'\",'&#039;'); }
@@ -188,11 +202,40 @@ def index(page: str | None = None) -> HTMLResponse:
       if (!kw) return newsCache;
       return newsCache.filter((n) => String(n.keyword || '').toLowerCase().includes(kw) || String(n.title || '').toLowerCase().includes(kw) || String(n.summary || '').toLowerCase().includes(kw));
     }
+    function getNewsPageSlice(arr) {
+      const total = arr.length;
+      const totalPages = Math.max(1, Math.ceil(total / NEWS_PAGE_SIZE));
+      newsPage = Math.max(1, Math.min(newsPage, totalPages));
+      const start = (newsPage - 1) * NEWS_PAGE_SIZE;
+      return {
+        rows: arr.slice(start, start + NEWS_PAGE_SIZE),
+        total,
+        totalPages,
+        start,
+      };
+    }
+    function renderNewsPager(total, totalPages, start) {
+      const meta = document.getElementById('news-page-meta');
+      const prevBtn = document.getElementById('news-prev-btn');
+      const nextBtn = document.getElementById('news-next-btn');
+      if (!total) {
+        meta.textContent = '第 0 条，共 0 条';
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
+        return;
+      }
+      const from = start + 1;
+      const to = Math.min(start + NEWS_PAGE_SIZE, total);
+      meta.textContent = `第 ${newsPage}/${totalPages} 页 · 显示 ${from}-${to} / ${total}`;
+      prevBtn.disabled = newsPage <= 1;
+      nextBtn.disabled = newsPage >= totalPages;
+    }
     function renderList(arr) {
       const list = document.getElementById('news-list');
       list.innerHTML = '';
-      if (!arr.length) { list.innerHTML = '<li class="empty">暂无新闻数据。</li>'; return; }
-      for (const n of arr) {
+      if (!arr.length) { list.innerHTML = '<li class="empty">暂无新闻数据。</li>'; renderNewsPager(0, 1, 0); return; }
+      const page = getNewsPageSlice(arr);
+      for (const n of page.rows) {
         const li = document.createElement('li');
         li.className = 'news-item' + (activeId === n.id ? ' active' : '');
         li.innerHTML = `<input type="checkbox" class="row-check" data-id="${n.id}" ${selectedIds.has(n.id) ? 'checked' : ''} />
@@ -211,6 +254,7 @@ def index(page: str | None = None) -> HTMLResponse:
         });
         list.appendChild(li);
       }
+      renderNewsPager(page.total, page.totalPages, page.start);
     }
     function renderDetail(n) {
       const box = document.getElementById('news-detail');
@@ -228,6 +272,7 @@ def index(page: str | None = None) -> HTMLResponse:
       const data = await res.json();
       newsCache = Array.isArray(data) ? data : [];
       const arr = filteredNews();
+      newsPage = 1;
       renderList(arr);
       if (!activeId && arr.length) { activeId = arr[0].id; renderList(arr); renderDetail(arr[0]); }
     }
@@ -245,7 +290,29 @@ def index(page: str | None = None) -> HTMLResponse:
       document.getElementById('news-detail').innerHTML = '<div class="muted">删除成功，请从左侧重新选择新闻。</div>';
       await loadNews();
     }
-    document.getElementById('keyword-search').addEventListener('input', () => renderList(filteredNews()));
+    document.getElementById('keyword-search').addEventListener('input', () => { newsPage = 1; renderList(filteredNews()); });
+    document.getElementById('news-prev-btn').addEventListener('click', () => { newsPage -= 1; renderList(filteredNews()); });
+    document.getElementById('news-next-btn').addEventListener('click', () => { newsPage += 1; renderList(filteredNews()); });
+    document.getElementById('news-list').addEventListener('wheel', (e) => {
+      const list = e.currentTarget;
+      if (e.deltaY > 0 && list.scrollTop + list.clientHeight >= list.scrollHeight - 2) {
+        const arr = filteredNews();
+        const maxPage = Math.max(1, Math.ceil(arr.length / NEWS_PAGE_SIZE));
+        if (newsPage < maxPage) {
+          e.preventDefault();
+          newsPage += 1;
+          renderList(arr);
+          list.scrollTop = 0;
+        }
+      } else if (e.deltaY < 0 && list.scrollTop <= 1) {
+        if (newsPage > 1) {
+          e.preventDefault();
+          newsPage -= 1;
+          renderList(filteredNews());
+          list.scrollTop = list.scrollHeight;
+        }
+      }
+    }, { passive: false });
     document.getElementById('refresh-btn').addEventListener('click', async () => { try { await loadNews(); } catch (e) { document.getElementById('news-list').innerHTML = `<li class="empty">加载失败：${escapeHtml(e?.message || '未知错误')}</li>`; }});
     document.getElementById('delete-btn').addEventListener('click', async () => {
       try { await deleteSelectedNews(); } catch (e) { alert(`删除失败：${e?.message || '未知错误'}`); }
@@ -265,7 +332,7 @@ def index(page: str | None = None) -> HTMLResponse:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenClaw 门户首页</title>
+  <title>OpenClaw市场趋势自动化分析平台</title>
   <style>
     :root {
       --bg: #f7f8fb;
@@ -540,7 +607,7 @@ def index(page: str | None = None) -> HTMLResponse:
 <body>
   <div class="topbar">
     <div class="wrap topbar-inner">
-      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
         <button onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
@@ -562,7 +629,7 @@ def index(page: str | None = None) -> HTMLResponse:
 
   <div class="wrap">
     <div class="portal-hero">
-      <h1>OpenClaw 门户首页</h1>
+      <h1>OpenClaw市场趋势自动化分析平台</h1>
       <p>选择一个模块进入页面；也可以在下方向 OpenClaw 发送消息。</p>
     </div>
 
@@ -623,6 +690,24 @@ def index(page: str | None = None) -> HTMLResponse:
       m.textContent = metaText;
       body.appendChild(t);
       body.appendChild(m);
+      li.appendChild(body);
+      list.appendChild(li);
+    }
+    function appendStatusMetaItem(list, title, lines) {
+      const li = document.createElement('li');
+      li.className = 'status-item';
+      const body = document.createElement('div');
+      body.className = 'status-item-body';
+      const t = document.createElement('div');
+      t.className = 'status-item-title';
+      t.textContent = title;
+      body.appendChild(t);
+      for (const line of (lines || [])) {
+        const m = document.createElement('div');
+        m.className = 'status-item-meta';
+        m.textContent = line;
+        body.appendChild(m);
+      }
       li.appendChild(body);
       list.appendChild(li);
     }
@@ -720,6 +805,17 @@ def index(page: str | None = None) -> HTMLResponse:
               ' 条 · 最近采样：' +
               (pr.last_captured_at || '—'),
           );
+          const recentMonitors = Array.isArray(pr.recent) ? pr.recent : [];
+          for (const m of recentMonitors.slice(0, 6)) {
+            appendStatusMetaItem(
+              list,
+              (m.keyword || '未命名关键词') + '（' + (m.monitor_id || '-').slice(0, 8) + '）',
+              [
+                '观测数：' + (m.observation_count ?? 0),
+                '最近采样：' + (m.last_captured_at || '—'),
+              ],
+            );
+          }
         }
 
         const nw = o.news_library || {};
@@ -733,6 +829,17 @@ def index(page: str | None = None) -> HTMLResponse:
             '新闻动态监测（新闻库）',
             '库内 ' + nw.item_count + ' 条 · 最近入库：' + (nw.last_created_at || '—'),
           );
+          const keywordRows = Array.isArray(nw.recent_keywords) ? nw.recent_keywords : [];
+          for (const row of keywordRows.slice(0, 6)) {
+            appendStatusMetaItem(
+              list,
+              row.keyword || '未命名关键词',
+              [
+                '条目数：' + (row.item_count ?? 0),
+                '最近事件时间：' + (row.last_event_at || row.last_created_at || '—'),
+              ],
+            );
+          }
         }
 
         const ext = o.external_cron || {};
@@ -755,26 +862,15 @@ def index(page: str | None = None) -> HTMLResponse:
           list.appendChild(empty);
         } else {
           for (const job of jobs.slice(0, 12)) {
-            const li = document.createElement('li');
-            li.className = 'status-item';
-            const status = job.status || 'unknown';
-            const name = job.job_name || '-';
-            const monitorId = job.monitor_id || '-';
-            const lastSeen = job.last_seen_at || '-';
-            const msg = job.message || '-';
-            li.innerHTML =
-              '<div class="status-item-body"><div class="status-item-title">' +
-              name +
-              '（' +
-              status +
-              '）</div><div class="status-item-meta">monitor_id: ' +
-              monitorId +
-              '</div><div class="status-item-meta">last_seen_at: ' +
-              lastSeen +
-              '</div><div class="status-item-meta">message: ' +
-              msg +
-              '</div></div>';
-            list.appendChild(li);
+            appendStatusMetaItem(
+              list,
+              (job.job_name || '-') + '（' + (job.status || 'unknown') + '）',
+              [
+                'monitor_id: ' + (job.monitor_id || '-'),
+                'last_seen_at: ' + (job.last_seen_at || '-'),
+                'message: ' + (job.message || '-'),
+              ],
+            );
           }
         }
       } catch (err) {
@@ -1197,7 +1293,7 @@ def index(page: str | None = None) -> HTMLResponse:
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenClaw 新闻报告门户</title>
+  <title>OpenClaw市场趋势自动化分析平台</title>
   <style>
     :root {
       --bg: #f7f8fb;
@@ -1379,7 +1475,7 @@ def index(page: str | None = None) -> HTMLResponse:
 <body>
   <div class="topbar">
     <div class="wrap topbar-inner">
-      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
         <button onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
@@ -2114,6 +2210,7 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
         "monitor_count": 0,
         "observation_count": 0,
         "last_captured_at": None,
+        "recent": [],
     }
     if settings.monitoring_database_url:
         import psycopg
@@ -2126,6 +2223,31 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
                 oc, lc = cur.fetchone()
                 price["observation_count"] = int(oc or 0)
                 price["last_captured_at"] = lc.isoformat() if lc else None
+                cur.execute(
+                    """
+                    SELECT
+                      m.monitor_id,
+                      m.keyword,
+                      COUNT(o.id) AS observation_count,
+                      MAX(o.captured_at) AS last_captured_at
+                    FROM price_monitors m
+                    LEFT JOIN price_observations o ON o.monitor_id = m.monitor_id
+                    GROUP BY m.monitor_id, m.keyword, m.created_at
+                    ORDER BY MAX(o.captured_at) DESC NULLS LAST, m.created_at DESC
+                    LIMIT 6
+                    """
+                )
+                recent_monitors: list[dict] = []
+                for monitor_id, keyword, obs_count, last_ts in cur.fetchall():
+                    recent_monitors.append(
+                        {
+                            "monitor_id": str(monitor_id),
+                            "keyword": keyword,
+                            "observation_count": int(obs_count or 0),
+                            "last_captured_at": last_ts.isoformat() if last_ts else None,
+                        }
+                    )
+                price["recent"] = recent_monitors
                 price["available"] = True
         except Exception as exc:  # noqa: BLE001
             price["error"] = str(exc)
@@ -2134,6 +2256,7 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
         "available": False,
         "item_count": 0,
         "last_created_at": None,
+        "recent_keywords": [],
     }
     if settings.news_database_url:
         import psycopg
@@ -2144,6 +2267,30 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
                 ic, mx = cur.fetchone()
                 news["item_count"] = int(ic or 0)
                 news["last_created_at"] = mx.isoformat() if mx else None
+                cur.execute(
+                    """
+                    SELECT
+                      keyword,
+                      COUNT(*) AS item_count,
+                      MAX(COALESCE(published_at, created_at)) AS last_event_at,
+                      MAX(created_at) AS last_created_at
+                    FROM news_library
+                    GROUP BY keyword
+                    ORDER BY MAX(COALESCE(published_at, created_at)) DESC NULLS LAST
+                    LIMIT 6
+                    """
+                )
+                recent_keywords: list[dict] = []
+                for keyword, item_count, last_event_at, last_created_at in cur.fetchall():
+                    recent_keywords.append(
+                        {
+                            "keyword": keyword,
+                            "item_count": int(item_count or 0),
+                            "last_event_at": last_event_at.isoformat() if last_event_at else None,
+                            "last_created_at": last_created_at.isoformat() if last_created_at else None,
+                        }
+                    )
+                news["recent_keywords"] = recent_keywords
                 news["available"] = True
         except Exception as exc:  # noqa: BLE001
             news["error"] = str(exc)
@@ -2556,7 +2703,7 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
 <body>
   <div class="topbar">
     <div class="wrap topbar-inner">
-      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
         <button onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
@@ -2626,8 +2773,11 @@ def price_trend_page() -> HTMLResponse:
       --muted: #6b7280;
       --line: #d8dee8;
       --brand: #0b4fa3;
+      --brand-soft: #dbeafe;
       --header: #0a2f66;
       --header-text: #ffffff;
+      --chart-grid: #d8dee8;
+      --chart-font: "Inter", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
     }
     body.dark {
       --bg: #0f1218;
@@ -2637,8 +2787,10 @@ def price_trend_page() -> HTMLResponse:
       --muted: #9fb0c9;
       --line: #2c3444;
       --brand: #66a3ff;
+      --brand-soft: #1c2b45;
       --header: #101624;
       --header-text: #f3f6fd;
+      --chart-grid: #334155;
     }
     * { box-sizing: border-box; }
     body {
@@ -2702,21 +2854,23 @@ def price_trend_page() -> HTMLResponse:
     .right-wrap { padding: 12px 14px 16px; }
     .detail-title { margin: 0 0 10px; color: var(--brand); }
     .muted { color: var(--muted); }
-    .chart-wrap { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 8px; margin-bottom: 12px; }
-    canvas { width: 100%; height: 300px; display: block; }
+    .chart-wrap { position: relative; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); padding: 10px; margin-bottom: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.06); }
+    canvas { width: 100%; height: 320px; display: block; }
     .chart-tooltip {
       position: absolute;
       pointer-events: none;
       display: none;
       z-index: 20;
-      background: rgba(0, 0, 0, 0.78);
-      color: #fff;
-      border-radius: 8px;
-      padding: 6px 8px;
+      background: rgba(15, 23, 42, 0.92);
+      color: #e5e7eb;
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 10px;
+      padding: 8px 10px;
       font-size: 12px;
       line-height: 1.4;
       white-space: nowrap;
-      box-shadow: 0 4px 14px rgba(0,0,0,0.35);
+      box-shadow: 0 8px 24px rgba(0,0,0,0.38);
+      font-family: var(--chart-font);
     }
     table { width: 100%; border-collapse: collapse; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
     th, td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; font-size: 13px; }
@@ -2725,6 +2879,11 @@ def price_trend_page() -> HTMLResponse:
     .delta-down { color: #127a38; font-weight: 600; }
     .delta-flat { color: var(--muted); }
     .empty { padding: 14px; color: var(--muted); }
+    .obs-pager { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:8px 0 2px; }
+    .obs-page-meta { color:var(--muted); font-size:12px; }
+    .obs-pager-actions { display:flex; gap:8px; }
+    .obs-pager-actions button { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:6px 10px; border-radius:10px; cursor:pointer; font-size:12px; }
+    .obs-pager-actions button:disabled { opacity:.45; cursor:not-allowed; }
     @media (max-width: 920px) {
       .page { grid-template-columns: 1fr; }
       #monitor-list { max-height: 300px; }
@@ -2734,7 +2893,7 @@ def price_trend_page() -> HTMLResponse:
 <body>
   <div class="topbar">
     <div class="wrap topbar-inner">
-      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
         <button onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
@@ -2768,6 +2927,8 @@ def price_trend_page() -> HTMLResponse:
           <div class="toolbar" style="padding:0 0 10px;border-bottom:none;">
             <label>窗口：</label>
             <select id="window-select">
+              <option value="1">1天（24小时）</option>
+              <option value="3">3天</option>
               <option value="7">7天</option>
               <option value="14">14天</option>
               <option value="30" selected>30天</option>
@@ -2780,6 +2941,13 @@ def price_trend_page() -> HTMLResponse:
             <div id="chart-tooltip" class="chart-tooltip"></div>
           </div>
           <div class="muted" style="margin:0 0 8px;">数据采集记录</div>
+          <div class="obs-pager">
+            <div id="obs-page-meta" class="obs-page-meta">-</div>
+            <div class="obs-pager-actions">
+              <button id="obs-prev-btn" type="button">上一页</button>
+              <button id="obs-next-btn" type="button">下一页</button>
+            </div>
+          </div>
           <table>
             <thead>
               <tr>
@@ -2802,6 +2970,12 @@ def price_trend_page() -> HTMLResponse:
     let monitors = [];
     let activeMonitorId = null;
     let trendPlotPoints = [];
+    let currentObservationRows = [];
+    let obsPage = 1;
+    const OBS_PAGE_SIZE = 100;
+    let lastChartPoints = [];
+    let lastChartTitle = '';
+    let lastChartUnit = 'CNY';
 
     function escapeHtml(text) {
       return String(text ?? '')
@@ -2876,27 +3050,47 @@ def price_trend_page() -> HTMLResponse:
       }
     }
 
-    function drawLine(points, title) {
+    function drawLine(points, title, unit = 'CNY', hoverPoint = null) {
       const canvas = document.getElementById('trend-canvas');
       const ctx = canvas.getContext('2d');
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const dpr = Math.max(window.devicePixelRatio || 1, 1);
+      const cssWidth = Math.max(320, Math.floor(canvas.clientWidth || 980));
+      const cssHeight = 320;
+      const reqWidth = Math.floor(cssWidth * dpr);
+      const reqHeight = Math.floor(cssHeight * dpr);
+      if (canvas.width !== reqWidth || canvas.height !== reqHeight) {
+        canvas.width = reqWidth;
+        canvas.height = reqHeight;
+      }
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, cssWidth, cssHeight);
       const styles = getComputedStyle(document.body);
       const surface = styles.getPropertyValue('--surface').trim() || '#ffffff';
-      const line = styles.getPropertyValue('--line').trim() || '#d8dee8';
+      const grid = styles.getPropertyValue('--chart-grid').trim() || '#d8dee8';
       const text = styles.getPropertyValue('--text').trim() || '#1f2937';
       const brand = styles.getPropertyValue('--brand').trim() || '#0b4fa3';
+      const brandSoft = styles.getPropertyValue('--brand-soft').trim() || '#dbeafe';
       const muted = styles.getPropertyValue('--muted').trim() || '#6b7280';
+      const fontFamily = styles.getPropertyValue('--chart-font').trim() || 'sans-serif';
+      const padLeft = 56;
+      const padRight = 18;
+      const padTop = 26;
+      const padBottom = 44;
+      const w = cssWidth - padLeft - padRight;
+      const h = cssHeight - padTop - padBottom;
+      const chartBottom = padTop + h;
+      ctx.font = `12px ${fontFamily}`;
       ctx.fillStyle = surface;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, cssWidth, cssHeight);
       if (!points.length) {
         ctx.fillStyle = muted;
-        ctx.fillText('暂无可绘制价格点', 20, 30);
+        ctx.fillText('暂无可绘制价格点', padLeft, padTop + 10);
         return;
       }
       const vals = points.map(p => p.value).filter(v => typeof v === 'number');
       if (!vals.length) {
         ctx.fillStyle = muted;
-        ctx.fillText('暂无可绘制价格点', 20, 30);
+        ctx.fillText('暂无可绘制价格点', padLeft, padTop + 10);
         return;
       }
       let minV = Math.min(...vals);
@@ -2907,53 +3101,138 @@ def price_trend_page() -> HTMLResponse:
         minV -= pad;
         maxV += pad;
       }
-      const pad = 40, w = canvas.width - pad * 2, h = canvas.height - pad * 2;
-      ctx.strokeStyle = line;
-      ctx.strokeRect(pad, pad, w, h);
-      ctx.strokeStyle = brand;
-      ctx.lineWidth = 2;
       const minTs = Math.min(...points.map((p) => p.ts));
       const maxTs = Math.max(...points.map((p) => p.ts));
+      const yTicks = 4;
+      ctx.strokeStyle = grid;
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= yTicks; i++) {
+        const y = padTop + (h / yTicks) * i;
+        ctx.beginPath();
+        ctx.moveTo(padLeft, y);
+        ctx.lineTo(padLeft + w, y);
+        ctx.stroke();
+        const tickValue = maxV - ((maxV - minV) / yTicks) * i;
+        ctx.fillStyle = muted;
+        ctx.fillText(tickValue.toFixed(2), 8, y + 4);
+      }
+      ctx.strokeStyle = grid;
+      ctx.beginPath();
+      ctx.moveTo(padLeft, padTop);
+      ctx.lineTo(padLeft, chartBottom);
+      ctx.lineTo(padLeft + w, chartBottom);
+      ctx.stroke();
+
       trendPlotPoints = [];
+      const linePath = new Path2D();
+      const areaPath = new Path2D();
       ctx.beginPath();
       points.forEach((p, idx) => {
-        const x = pad + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
-        const y = pad + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
+        const x = padLeft + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
+        const y = padTop + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
         trendPlotPoints.push({ x, y, p });
-        if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        if (idx === 0) {
+          linePath.moveTo(x, y);
+          areaPath.moveTo(x, chartBottom);
+          areaPath.lineTo(x, y);
+        } else {
+          linePath.lineTo(x, y);
+          areaPath.lineTo(x, y);
+        }
       });
-      ctx.stroke();
+      const lastPoint = trendPlotPoints[trendPlotPoints.length - 1];
+      if (lastPoint) {
+        areaPath.lineTo(lastPoint.x, chartBottom);
+        areaPath.closePath();
+      }
+
+      const fillGradient = ctx.createLinearGradient(0, padTop, 0, chartBottom);
+      fillGradient.addColorStop(0, brandSoft);
+      fillGradient.addColorStop(1, 'transparent');
+      ctx.fillStyle = fillGradient;
+      ctx.fill(areaPath);
+
+      ctx.strokeStyle = brand;
+      ctx.lineWidth = 2.6;
+      ctx.shadowColor = 'rgba(11,79,163,0.22)';
+      ctx.shadowBlur = 6;
+      ctx.stroke(linePath);
+      ctx.shadowBlur = 0;
       // Draw point markers so single-point data is still visible.
       ctx.fillStyle = brand;
       points.forEach((p) => {
-        const x = pad + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
-        const y = pad + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
+        const x = padLeft + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
+        const y = padTop + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
         ctx.beginPath();
-        ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+        ctx.arc(x, y, 3.1, 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.fillStyle = text;
-      ctx.fillText(`min: ${minV.toFixed(2)}`, pad + 8, pad + h - 8);
-      ctx.fillText(`max: ${maxV.toFixed(2)}`, pad + 8, pad + 14);
-      ctx.fillText(title || '', pad + 120, pad + 14);
+      ctx.font = `600 13px ${fontFamily}`;
+      ctx.fillText(title || '', padLeft, 16);
+      ctx.font = `12px ${fontFamily}`;
+      ctx.fillStyle = muted;
+      ctx.fillText(`单位：${unit || 'CNY'}  |  最低 ${minV.toFixed(2)} / 最高 ${maxV.toFixed(2)}`, padLeft + 2, cssHeight - 10);
       if (points.length) {
         const startLabel = points[0].label || '';
         const endLabel = points[points.length - 1].label || '';
-        ctx.fillText(startLabel, pad, pad + h + 18);
+        ctx.fillText(startLabel, padLeft, cssHeight - 26);
         const endWidth = ctx.measureText(endLabel).width;
-        ctx.fillText(endLabel, pad + w - endWidth, pad + h + 18);
+        ctx.fillText(endLabel, padLeft + w - endWidth, cssHeight - 26);
+      }
+      if (hoverPoint) {
+        const hp = hoverPoint;
+        ctx.save();
+        ctx.setLineDash([4, 4]);
+        ctx.strokeStyle = muted;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(hp.x, padTop);
+        ctx.lineTo(hp.x, chartBottom);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(padLeft, hp.y);
+        ctx.lineTo(padLeft + w, hp.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = brand;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
     function renderObservationTable(rows) {
       const body = document.getElementById('obs-body');
+      const pageMeta = document.getElementById('obs-page-meta');
+      const prevBtn = document.getElementById('obs-prev-btn');
+      const nextBtn = document.getElementById('obs-next-btn');
       if (!rows.length) {
         body.innerHTML = '<tr><td colspan="5" class="empty">暂无采集数据</td></tr>';
+        pageMeta.textContent = '第 0 条，共 0 条';
+        prevBtn.disabled = true;
+        nextBtn.disabled = true;
         return;
       }
       body.innerHTML = '';
-      const top = rows.slice().reverse().slice(0, 200);
-      for (const r of top) {
+      const all = rows.slice().reverse();
+      const total = all.length;
+      const totalPages = Math.max(1, Math.ceil(total / OBS_PAGE_SIZE));
+      obsPage = Math.max(1, Math.min(obsPage, totalPages));
+      const start = (obsPage - 1) * OBS_PAGE_SIZE;
+      const pageRows = all.slice(start, start + OBS_PAGE_SIZE);
+      const from = start + 1;
+      const to = Math.min(start + OBS_PAGE_SIZE, total);
+      pageMeta.textContent = `第 ${obsPage}/${totalPages} 页 · 显示 ${from}-${to} / ${total}`;
+      prevBtn.disabled = obsPage <= 1;
+      nextBtn.disabled = obsPage >= totalPages;
+      for (const r of pageRows) {
         const delta = r.delta_from_prev;
         let deltaText = '-';
         let deltaCls = 'delta-flat';
@@ -2978,6 +3257,38 @@ def price_trend_page() -> HTMLResponse:
         `;
         body.appendChild(tr);
       }
+    }
+
+    function windowSpanLabel(windowDaysStr) {
+      const n = Number(windowDaysStr);
+      if (n === 1) return '近1天（24小时）';
+      if (n === 3) return '近3天';
+      if (Number.isFinite(n) && n > 0) return `近${n}天`;
+      return '';
+    }
+
+    function filterRowsByWindow(rows, windowDaysStr) {
+      const n = Number(windowDaysStr);
+      if (!Number.isFinite(n) || n <= 0) return Array.isArray(rows) ? rows : [];
+      const cutoff = Date.now() - n * 24 * 60 * 60 * 1000;
+      return (rows || []).filter((r) => {
+        const ts = Date.parse(r.captured_at || '');
+        return Number.isFinite(ts) && ts >= cutoff;
+      });
+    }
+
+    function inferPriceUnit(keyword, rows) {
+      const k = String(keyword || '').toLowerCase();
+      if (/usd|xau|xag|wti|brent|btc|eth|\\$/.test(k)) return 'USD';
+      if (/eur|欧元/.test(k)) return 'EUR';
+      if (/jpy|日元/.test(k)) return 'JPY';
+      if (Array.isArray(rows)) {
+        for (const r of rows) {
+          const c = String(r?.currency || '').toUpperCase();
+          if (c) return c;
+        }
+      }
+      return 'CNY';
     }
 
     function buildPointsFromObservations(rows) {
@@ -3013,7 +3324,8 @@ def price_trend_page() -> HTMLResponse:
       const ts = await tsRes.json();
       const obs = await obsRes.json();
       const obsRows = Array.isArray(obs.rows) ? obs.rows : [];
-      let pts = buildPointsFromObservations(obsRows);
+      const rowsInWindow = filterRowsByWindow(obsRows, windowDays);
+      let pts = buildPointsFromObservations(rowsInWindow);
       if (!pts.length && Array.isArray(ts.points) && ts.points.length) {
         pts = ts.points
           .filter((x) => typeof x.avg_price === 'number' && x.date)
@@ -3023,8 +3335,15 @@ def price_trend_page() -> HTMLResponse:
           })
           .sort((a, b) => a.ts - b.ts);
       }
-      drawLine(pts, `${current?.keyword || ''}（近${windowDays}天）`);
-      renderObservationTable(obsRows);
+      const spanLabel = windowSpanLabel(windowDays);
+      const unit = inferPriceUnit(current?.keyword || '', rowsInWindow);
+      lastChartPoints = pts;
+      lastChartTitle = `${current?.keyword || ''}${spanLabel ? `（${spanLabel}）` : ''}`;
+      lastChartUnit = unit;
+      drawLine(lastChartPoints, lastChartTitle, lastChartUnit);
+      currentObservationRows = rowsInWindow;
+      obsPage = 1;
+      renderObservationTable(currentObservationRows);
     }
 
     function setupChartHover() {
@@ -3037,8 +3356,8 @@ def price_trend_page() -> HTMLResponse:
           return;
         }
         const rect = canvas.getBoundingClientRect();
-        const x = (ev.clientX - rect.left) * (canvas.width / rect.width);
-        const y = (ev.clientY - rect.top) * (canvas.height / rect.height);
+        const x = ev.clientX - rect.left;
+        const y = ev.clientY - rect.top;
         let nearest = null;
         let minDist = Number.POSITIVE_INFINITY;
         for (const item of trendPlotPoints) {
@@ -3059,12 +3378,14 @@ def price_trend_page() -> HTMLResponse:
           tooltip.style.display = 'none';
           return;
         }
-        tooltip.innerHTML = `时间：${escapeHtml(nearest.p.rawTime || nearest.p.label || '-')}<br/>价格：${Number(nearest.p.value).toFixed(2)}`;
+        drawLine(lastChartPoints, lastChartTitle, lastChartUnit, nearest);
+        tooltip.innerHTML = `时间：${escapeHtml(nearest.p.rawTime || nearest.p.label || '-')}<br/>价格：${Number(nearest.p.value).toFixed(2)} ${escapeHtml(lastChartUnit || 'CNY')}`;
         tooltip.style.display = 'block';
         tooltip.style.left = `${nearest.x + 16}px`;
         tooltip.style.top = `${Math.max(8, nearest.y - 10)}px`;
       });
       canvas.addEventListener('mouseleave', () => {
+        drawLine(lastChartPoints, lastChartTitle, lastChartUnit);
         tooltip.style.display = 'none';
       });
     }
@@ -3076,6 +3397,14 @@ def price_trend_page() -> HTMLResponse:
     document.getElementById('refresh-detail-btn').addEventListener('click', loadDetail);
     document.getElementById('window-select').addEventListener('change', loadDetail);
     document.getElementById('monitor-search').addEventListener('input', renderMonitorList);
+    document.getElementById('obs-prev-btn').addEventListener('click', () => {
+      obsPage -= 1;
+      renderObservationTable(currentObservationRows);
+    });
+    document.getElementById('obs-next-btn').addEventListener('click', () => {
+      obsPage += 1;
+      renderObservationTable(currentObservationRows);
+    });
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
@@ -3137,12 +3466,16 @@ def keyword_tracking_page() -> HTMLResponse:
     th { background:var(--surface-2); }
     .ok { color:#127a38; font-weight:700; }
     .warn { color:#9a6700; font-weight:700; }
+    .cards { display:grid; gap:14px; margin: 4px 0 20px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:12px 14px; }
+    .card .k { color:var(--muted); font-size:12px; margin-bottom:4px; }
+    .card .v { font-size:20px; font-weight:700; color:var(--brand); }
   </style>
 </head>
 <body>
   <div class="topbar">
     <div class="wrap topbar-inner">
-      <div class="logo">OpenClaw 新闻自动化平台</div>
+      <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
         <button onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
@@ -3193,6 +3526,25 @@ def keyword_tracking_page() -> HTMLResponse:
       </thead>
       <tbody id="news-tbody">
         <tr><td colspan="5" class="muted">加载中...</td></tr>
+      </tbody>
+    </table>
+    <h2>分析报告生成</h2>
+    <div class="cards">
+      <div class="card"><div class="k">已发布报告数</div><div id="report-count" class="v">-</div></div>
+      <div class="card"><div class="k">最近生成时间</div><div id="report-last-time" class="v" style="font-size:15px;">-</div></div>
+      <div class="card"><div class="k">涉及关键词数</div><div id="report-keywords" class="v">-</div></div>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>关键词</th>
+          <th>报告数</th>
+          <th>最近生成时间</th>
+          <th>状态</th>
+        </tr>
+      </thead>
+      <tbody id="report-tbody">
+        <tr><td colspan="4" class="muted">加载中...</td></tr>
       </tbody>
     </table>
   </div>
@@ -3274,6 +3626,60 @@ def keyword_tracking_page() -> HTMLResponse:
         body.innerHTML = `<tr><td colspan="5" class="muted">加载失败：${e?.message || '未知错误'}</td></tr>`;
       }
     }
+    async function loadReportMonitoring() {
+      const body = document.getElementById('report-tbody');
+      const countEl = document.getElementById('report-count');
+      const lastEl = document.getElementById('report-last-time');
+      const kwEl = document.getElementById('report-keywords');
+      try {
+        const res = await fetch('/api/v1/public/reports');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const arr = await res.json();
+        if (!Array.isArray(arr) || !arr.length) {
+          countEl.textContent = '0';
+          lastEl.textContent = '-';
+          kwEl.textContent = '0';
+          body.innerHTML = '<tr><td colspan="4" class="muted">暂无已发布分析报告。</td></tr>';
+          return;
+        }
+        countEl.textContent = String(arr.length);
+        const grouped = new Map();
+        let latest = null;
+        for (const item of arr) {
+          const keyword = (item.keyword || '未命名关键词').trim() || '未命名关键词';
+          const generatedAt = item.generated_at || null;
+          if (!grouped.has(keyword)) grouped.set(keyword, { keyword, count: 0, latestGeneratedAt: null });
+          const g = grouped.get(keyword);
+          g.count += 1;
+          if (generatedAt && (!g.latestGeneratedAt || generatedAt > g.latestGeneratedAt)) g.latestGeneratedAt = generatedAt;
+          if (generatedAt && (!latest || generatedAt > latest)) latest = generatedAt;
+        }
+        lastEl.textContent = latest || '-';
+        kwEl.textContent = String(grouped.size);
+        const rows = Array.from(grouped.values()).sort((a, b) => {
+          const ta = a.latestGeneratedAt || '';
+          const tb = b.latestGeneratedAt || '';
+          return tb.localeCompare(ta);
+        });
+        body.innerHTML = '';
+        for (const r of rows) {
+          const healthy = (r.count || 0) > 0;
+          const tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${r.keyword}</td>
+            <td>${r.count || 0}</td>
+            <td>${r.latestGeneratedAt || '-'}</td>
+            <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待生成'}</td>
+          `;
+          body.appendChild(tr);
+        }
+      } catch (e) {
+        countEl.textContent = '-';
+        lastEl.textContent = '-';
+        kwEl.textContent = '-';
+        body.innerHTML = `<tr><td colspan="4" class="muted">加载失败：${e?.message || '未知错误'}。如提示 503，请先配置 OPENCLAW_DATABASE_URL。</td></tr>`;
+      }
+    }
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
@@ -3284,6 +3690,7 @@ def keyword_tracking_page() -> HTMLResponse:
     setupDarkMode();
     loadMonitors();
     loadNewsMonitoring();
+    loadReportMonitoring();
   </script>
 </body>
 </html>

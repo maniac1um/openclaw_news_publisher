@@ -25,3 +25,5 @@ htmlcov/
 
 # Keep helper scripts in git; they should stay generic and secret-free.
 
+# Local planning notes (do not commit)
+/local_notes/

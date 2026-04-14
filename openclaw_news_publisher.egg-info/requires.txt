@@ -1,9 +1,0 @@
-fastapi
-pydantic-settings
-uvicorn
-websockets
-psycopg[binary]
-
-[dev]
-pytest
-httpx

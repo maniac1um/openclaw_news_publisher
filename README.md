@@ -47,7 +47,7 @@
   - `/healthz`（健康检查）
   - `/healthz/db`（数据库连通性检查；未配置数据库时返回 enabled=false）
 - 自动化发布
-  - 渲染产物写入 `content/reports/rendered/`
+  - 渲染产物默认写入 `content/reports/rendered/`（运行时目录，不纳入 Git）
   - 发布脚本 `scripts/publish_site.py` 执行 git add/commit（可选 push）
 
 ## 目录结构
@@ -72,15 +72,20 @@ openclaw_news_publisher/
 │  │  └─ publish_service.py
 │  ├─ workers/job_runner.py
 │  └─ main.py
-├─ content/
-│  └─ reports/
-│     ├─ raw/
-│     └─ rendered/
 ├─ docs/
 │  ├─ api/openclaw-intake.md（报告入站 + 价格监测 ingest 约定）
 │  ├─ architecture/news-pipeline.md
 │  └─ cross-platform-development.md
-├─ scripts/publish_site.py
+├─ scripts/
+│  ├─ deploy/
+│  │  ├─ one-click-linux.sh
+│  │  └─ one-click-windows.ps1
+│  ├─ local/
+│  │  ├─ start-server.sh
+│  │  ├─ stop-server.sh
+│  │  ├─ restart-server.sh
+│  │  └─ verify-openclaw-databases.sh
+│  └─ publish_site.py
 ├─ tests/
 │  ├─ api/test_openclaw_intake.py
 │  └─ services/test_report_pipeline.py
@@ -546,8 +551,8 @@ curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
 ## 门户端删除接口（可复用）
 
 用于门户端或后续自动清理任务删除报告：
-- 配置了 `OPENCLAW_DATABASE_URL` 时：删除 PostgreSQL 中对应记录；
-- 未配置数据库时：删除 `content/reports/raw/` 与 `content/reports/rendered/` 对应文件。
+- 该接口要求配置 `OPENCLAW_DATABASE_URL`，删除 PostgreSQL 中对应报告记录；
+- 同时会尝试清理同名运行时渲染文件（若存在）。
 
 `POST /api/v1/public/reports/bulk-delete`
 
@@ -628,7 +633,7 @@ pytest -q
 
 ## 发布链路说明
 
-- 后台任务将标准化报告写入 `content/reports/rendered/{ingest_id}.json`。
+- 后台任务会将标准化报告写入运行时目录 `content/reports/rendered/{ingest_id}.json`（目录按需自动创建，默认不纳入 Git）。
 - `PublishService` 调用 `scripts/publish_site.py`：
   - `git add` 渲染文件
   - 若有变更则 `git commit`
@@ -644,8 +649,7 @@ pytest -q
 
 3. 用户页面无数据
    - 先确认 `POST /api/v1/openclaw/reports` 成功并且状态到 `published`。
-   - 若启用数据库：检查 `GET /healthz/db` 与 `reports` 表是否有对应 `ingest_id`。
-   - 若未启用数据库：检查 `content/reports/rendered/` 是否生成 JSON 文件。
+   - 检查 `GET /healthz/db` 与 `reports` 表是否有对应 `ingest_id`。
 
 4. 页面显示中文为 `???`
    - 这通常是请求发送端编码问题，建议用 UTF-8 并设置 `Content-Type: application/json; charset=utf-8`。

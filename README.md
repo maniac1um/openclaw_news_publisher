@@ -96,6 +96,46 @@ openclaw_news_publisher/
 - websockets（用于后端代理 OpenClaw Gateway 流式聊天事件）
 - psycopg（用于 PostgreSQL 持久化）
 
+## 一键部署（Linux / Windows）
+
+> 目标：在新设备上快速拉起服务（创建虚拟环境、安装依赖、启动服务）。  
+> 说明：**脚本不安装/不配置 PostgreSQL**，仅使用你已有的数据库配置。
+
+### 前置条件（必须）
+
+- 已安装 `git`
+- 已安装 Python 3.11+
+- 可访问 PyPI（用于安装 Python 依赖）
+- （可选但推荐）已准备 PostgreSQL，并具备对应库连接串  
+  - `OPENCLAW_DATABASE_URL`
+  - `OPENCLAW_MONITORING_DATABASE_URL`
+  - `OPENCLAW_NEWS_DATABASE_URL`
+
+### Linux 一键部署
+
+```bash
+git clone https://github.com/maniac1um/openclaw_news_publisher.git
+cd openclaw_news_publisher
+bash scripts/deploy/one-click-linux.sh
+```
+
+### Windows 一键部署（PowerShell）
+
+```powershell
+git clone https://github.com/maniac1um/openclaw_news_publisher.git
+cd openclaw_news_publisher
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy\one-click-windows.ps1
+```
+
+脚本默认行为：
+
+- 自动创建 `.venv`（若不存在）
+- 自动执行 `pip install -e .`
+- 若 `.env` 不存在，则从 `.env.example` 复制
+- 自动启动 `uvicorn app.main:app`
+
+> 若你还未配置 PostgreSQL，可先用最小 `.env` 启动服务；数据库相关功能会按接口返回提示（例如 503 或 enabled=false）。
+
 ## 快速开始（本地）
 
 以下示例基于 **Ubuntu 24.04 LTS**，并以 PostgreSQL 作为本地持久化存储。
@@ -203,6 +243,24 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
 - 数据库检查：`http://127.0.0.1:8000/healthz/db`
 
 在 **Windows 与 Ubuntu** 等多台机器上基于 GitHub 协作开发时，参见 [docs/cross-platform-development.md](docs/cross-platform-development.md)。
+
+## 本地脚本（可直接提交 Git）
+
+项目内 `scripts/local` 目录下脚本已改为通用、无本机私有路径和敏感信息，可直接提交并在新设备复用：
+
+- `scripts/local/start-server.sh`
+- `scripts/local/stop-server.sh`
+- `scripts/local/restart-server.sh`
+- `scripts/local/verify-openclaw-databases.sh`
+
+Linux/macOS 常用：
+
+```bash
+bash scripts/local/start-server.sh
+bash scripts/local/stop-server.sh
+bash scripts/local/restart-server.sh
+bash scripts/local/verify-openclaw-databases.sh
+```
 
 ## 配置项（环境变量）
 

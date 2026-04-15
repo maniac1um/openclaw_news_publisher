@@ -85,3 +85,34 @@
 ```
 
 - `price` 必填；`captured_at` 可省略。
+
+---
+
+## 网页工作流控制台 API（public）
+
+为支持“尽量在网页完成配置与排障”，新增以下 public workflow 路由（无需 `X-Api-Key`）：
+
+- `GET /api/v1/public/workflow/state`
+- `GET /api/v1/public/workflow/external-runs?limit=120`
+- `GET /api/v1/public/workflow/external-configs`
+- `POST /api/v1/public/workflow/external-configs`
+- `POST /api/v1/public/workflow/external-configs/{job_name}/toggle`
+- `POST /api/v1/public/workflow/monitor/bootstrap`
+- `POST /api/v1/public/workflow/analysis/run`
+
+### 说明
+
+- `workflow/state` 返回统一编排视图：`overview`、`internal_scheduler`、`external_scheduler_configs`、`external_scheduler_runs`。
+- `workflow/monitor/bootstrap` 是 `openclaw/monitoring/bootstrap` 的网页封装入口。
+- `workflow/analysis/run` 与新闻触发联合分析逻辑保持一致，可选择 `publish=true|false`。
+
+---
+
+## external-heartbeat 持久化语义（更新）
+
+`POST /api/v1/openclaw/monitoring/external-heartbeat` 现在除了维护进程内最近状态外，还会把事件写入监测库：
+
+- `external_scheduler_runs`：运行事件历史（按 `last_seen_at` 排序）
+- `external_scheduler_configs`：网页端维护的外部调度配置（job 与 cron 元信息）
+
+因此服务重启后，`public/workflow/external-runs` 仍可回看历史，便于排障与审计。

@@ -90,6 +90,38 @@ class ExternalSchedulerHeartbeatRequest(BaseModel):
     message: str | None = None
 
 
+class WorkflowBootstrapRequest(BaseModel):
+    keyword: str
+    cadence: str = "daily"
+    source_profile: str = "auto"
+    platforms: list[str] = ["news"]
+    candidate_count: int = 10
+
+
+class WorkflowTriggerRequest(BaseModel):
+    monitor_id: str
+    keyword: str | None = None
+    keywords: list[str] | None = None
+    window_days: int = 7
+    news_hours: int = 72
+    horizon: str = "24h"
+    publish: bool = True
+
+
+class ExternalSchedulerConfigRequest(BaseModel):
+    job_name: str
+    monitor_id: str
+    cron_expr: str
+    timezone: str = "Asia/Shanghai"
+    enabled: bool = True
+    retry_policy: str = "no-retry"
+    notes: str | None = None
+
+
+class ExternalSchedulerToggleRequest(BaseModel):
+    enabled: bool
+
+
 class NewsBulkDeleteRequest(BaseModel):
     ids: list[int]
 
@@ -646,6 +678,21 @@ def index(page: str | None = None) -> HTMLResponse:
     }
     .portal-footer a { color: var(--link); text-decoration: none; }
     .portal-footer a:hover { text-decoration: underline; }
+    .workflow-grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top:10px; }
+    .workflow-box { border:1px dashed var(--line); border-radius:12px; padding:10px; background:var(--surface); }
+    .workflow-box .k { font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .workflow-box .v { font-size:14px; font-weight:700; color:var(--brand); }
+    .workflow-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+    .workflow-actions button { border:1px solid var(--line); background:var(--surface-2); color:var(--text); padding:7px 10px; border-radius:10px; cursor:pointer; }
+    .workflow-toolbar { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:10px; }
+    .workflow-log { margin-top:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface); max-height:220px; overflow:auto; }
+    .workflow-log-item { border-bottom:1px dashed var(--line); padding:8px 10px; font-size:12px; color:var(--muted); }
+    .workflow-log-item:last-child { border-bottom:none; }
+    .workflow-form { display:grid; gap:8px; margin-top:8px; }
+    .workflow-form input, .workflow-form select, .workflow-form textarea { width:100%; border:1px solid var(--line); background:var(--surface-2); color:var(--text); border-radius:10px; padding:8px 10px; font-family:inherit; }
+    .workflow-form textarea { min-height:72px; resize:vertical; }
+    .workflow-result { margin-top:10px; border:1px dashed var(--line); border-radius:10px; padding:8px; font-size:12px; color:var(--muted); white-space:pre-wrap; }
+    .workflow-toggle { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); }
 
     .modal-overlay {
       position: fixed;
@@ -675,7 +722,7 @@ def index(page: str | None = None) -> HTMLResponse:
     <div class="wrap topbar-inner">
       <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
-        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
@@ -715,6 +762,26 @@ def index(page: str | None = None) -> HTMLResponse:
         </div>
       </div>
 
+      <div class="card workflow-card">
+        <div class="card-title">网页化工作流控制台</div>
+        <div class="muted">在网页内完成监测创建、调度配置、联合分析触发与运行排障。</div>
+        <div class="workflow-grid">
+          <div class="workflow-box"><div class="k">监测任务</div><div class="v" id="wf-monitor-count">-</div></div>
+          <div class="workflow-box"><div class="k">价格观测</div><div class="v" id="wf-observation-count">-</div></div>
+          <div class="workflow-box"><div class="k">已配置定时任务</div><div class="v" id="wf-config-count">-</div></div>
+          <div class="workflow-box"><div class="k">最近一次运行</div><div class="v" id="wf-last-run">-</div></div>
+        </div>
+        <div class="workflow-actions">
+          <button id="wf-open-wizard-btn" type="button">新手一键配置</button>
+          <button id="wf-refresh-btn" type="button">更新工作流状态</button>
+          <button id="wf-open-bootstrap-btn" type="button">新建价格监测任务</button>
+          <button id="wf-open-config-btn" type="button">配置外部定时任务</button>
+          <button id="wf-open-analysis-btn" type="button">立即生成联合分析</button>
+        </div>
+        <div id="wf-result" class="workflow-result">等待操作...</div>
+        <div class="workflow-log" id="wf-run-log" title="仅显示最新一条工作流运行记录"></div>
+      </div>
+
       <div class="card status-card">
         <div class="card-title">OpenClaw 工作情况</div>
         <div class="muted" id="status-summary">加载中...</div>
@@ -731,15 +798,34 @@ def index(page: str | None = None) -> HTMLResponse:
     <div style="margin-top:6px;"><a href="mailto:maniac1um@163.com">联系作者</a></div>
   </div>
 
+  <div id="wf-modal" class="modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3 class="modal-title" id="wf-modal-title">工作流向导</h3>
+      <div class="modal-body" id="wf-modal-body"></div>
+      <div class="modal-actions">
+        <button class="btn" id="wf-modal-cancel-btn" type="button">关闭</button>
+        <button class="btn primary" id="wf-modal-submit-btn" type="button">提交</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      syncDarkModeButtonLabel();
     }
     function setupDarkMode() {
       if (localStorage.getItem('oc_dark') === '1') {
         document.body.classList.add('dark');
       }
+      syncDarkModeButtonLabel();
+    }
+    function syncDarkModeButtonLabel() {
+      const btn = document.getElementById('dark-mode-btn');
+      if (!btn) return;
+      const isDark = document.body.classList.contains('dark');
+      btn.textContent = isDark ? '暗色模式（开）' : '暗色模式（关）';
     }
     function formatCnLocalDateTime(raw) {
       if (raw == null || raw === '') return '-';
@@ -965,6 +1051,392 @@ def index(page: str | None = None) -> HTMLResponse:
         list.appendChild(li);
       }
     }
+
+    const wfResult = document.getElementById('wf-result');
+    const wfRunLog = document.getElementById('wf-run-log');
+    const wfMonitorCount = document.getElementById('wf-monitor-count');
+    const wfObservationCount = document.getElementById('wf-observation-count');
+    const wfConfigCount = document.getElementById('wf-config-count');
+    const wfLastRun = document.getElementById('wf-last-run');
+    const wfModal = document.getElementById('wf-modal');
+    const wfModalTitle = document.getElementById('wf-modal-title');
+    const wfModalBody = document.getElementById('wf-modal-body');
+    const wfModalCancelBtn = document.getElementById('wf-modal-cancel-btn');
+    const wfModalSubmitBtn = document.getElementById('wf-modal-submit-btn');
+    let wfModalSubmitHandler = null;
+    let workflowStateCache = null;
+    let workflowMonitorsCache = [];
+
+    function setWorkflowResult(text) {
+      if (wfResult) wfResult.textContent = text;
+    }
+
+    function htmlEsc(text) {
+      return String(text ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    async function fetchJson(url, options = {}) {
+      const res = await fetch(url, options);
+      let payload = null;
+      try { payload = await res.json(); } catch (e) {}
+      if (!res.ok) {
+        const detail = payload?.detail || payload?.error || `HTTP ${res.status}`;
+        throw new Error(detail);
+      }
+      return payload;
+    }
+
+    function openWorkflowModal(title, html, onSubmit) {
+      wfModalTitle.textContent = title;
+      wfModalBody.innerHTML = html;
+      wfModal.style.display = 'flex';
+      wfModalSubmitHandler = onSubmit;
+    }
+
+    function closeWorkflowModal() {
+      wfModal.style.display = 'none';
+      wfModalSubmitHandler = null;
+      wfModalBody.innerHTML = '';
+    }
+
+    function renderWorkflowRunLog(runs) {
+      wfRunLog.innerHTML = '';
+      const rows = Array.isArray(runs) ? runs : [];
+      if (!rows.length) {
+        wfRunLog.innerHTML = '<div class="workflow-log-item">暂无外部调度运行记录。</div>';
+        return;
+      }
+      const run = rows[0];
+      const div = document.createElement('div');
+      div.className = 'workflow-log-item';
+      div.textContent =
+        `[${formatCnLocalDateTime(run.last_seen_at)}] ` +
+        `${run.job_name || '-'} / ${run.status || 'unknown'} / ` +
+        `monitor=${(run.monitor_id || '-').slice(0, 8)} / ${run.message || '-'}`;
+      wfRunLog.appendChild(div);
+    }
+
+    function renderWorkflowState(state) {
+      workflowStateCache = state || null;
+      const ov = state?.overview || {};
+      const price = ov.price_monitoring || {};
+      const runs = Array.isArray(state?.external_scheduler_runs) ? state.external_scheduler_runs : [];
+      const cfgs = Array.isArray(state?.external_scheduler_configs) ? state.external_scheduler_configs : [];
+      wfMonitorCount.textContent = String(price.monitor_count ?? 0);
+      wfObservationCount.textContent = String(price.observation_count ?? 0);
+      wfConfigCount.textContent = String(cfgs.length);
+      wfLastRun.textContent = runs.length ? formatCnLocalDateTime(runs[0].last_seen_at) : '-';
+      renderWorkflowRunLog(runs);
+    }
+
+    async function loadWorkflowState() {
+      try {
+        const state = await fetchJson('/api/v1/public/workflow/state');
+        renderWorkflowState(state);
+        setWorkflowResult('工作流状态已刷新。');
+      } catch (e) {
+        setWorkflowResult(`工作流状态加载失败：${e?.message || '未知错误'}`);
+      }
+    }
+
+    async function loadWorkflowMonitors() {
+      const arr = await fetchJson('/api/v1/public/monitoring/monitors');
+      workflowMonitorsCache = Array.isArray(arr) ? arr : [];
+      return workflowMonitorsCache;
+    }
+
+    function openWizardModal() {
+      openWorkflowModal(
+        '首次配置向导',
+        `<div class="muted" style="font-size:13px;line-height:1.6;">
+          用途：一次性完成最小闭环配置（关键词 → 创建监测任务 → 保存调度配置）。
+          若勾选“生成分析后自动发布报告”，会额外触发一次联合分析并提交报告。
+        </div>
+        <div class="workflow-form">
+          <label><strong>关键词（必填）</strong>：你要监测和分析的对象。</label>
+          <input id="wf-wz-keyword" placeholder="例：黄金 / 现货黄金 / 原油" />
+          <div class="muted" style="font-size:12px;">会用于创建 monitor，并作为后续分析默认关键词。</div>
+
+          <label><strong>采样节奏 cadence（必填）</strong>：用于监测任务元信息。</label>
+          <select id="wf-wz-cadence"><option value="hourly">hourly（小时级）</option><option value="daily" selected>daily（天级）</option></select>
+          <div class="muted" style="font-size:12px;">建议与实际 cron 频率保持一致，便于排障。</div>
+
+          <label><strong>外部调度任务名 job_name（建议填写）</strong>：用于日志与运行历史识别。</label>
+          <input id="wf-wz-job-name" placeholder="例：openclaw-gold-ingest-30min" />
+          <div class="muted" style="font-size:12px;">不填会自动生成，但建议自定义，便于长期运维。</div>
+
+          <label><strong>cron 表达式（必填）</strong>：外部调度计划（5段）。</label>
+          <input id="wf-wz-cron" placeholder="例：*/30 * * * *（每30分钟）" value="*/30 * * * *" />
+          <div class="muted" style="font-size:12px;">常用：*/30 * * * *（每30分钟）；0 * * * *（每小时整点）。</div>
+
+          <label><strong>时区 timezone（必填）</strong>：解释 cron 时间的时区。</label>
+          <input id="wf-wz-timezone" placeholder="例：Asia/Shanghai" value="Asia/Shanghai" />
+          <div class="muted" style="font-size:12px;">中国大陆建议填写 Asia/Shanghai。</div>
+
+          <div class="workflow-toggle"><input id="wf-wz-publish" type="checkbox" checked />生成分析后自动发布报告</div>
+          <div class="muted" style="font-size:12px;">勾选：向导结束后会立即触发一次联合分析并提交报告。</div>
+        </div>`,
+        async () => {
+          const keyword = (document.getElementById('wf-wz-keyword')?.value || '').trim();
+          if (!keyword) throw new Error('请先填写关键词。');
+          const cadence = document.getElementById('wf-wz-cadence')?.value || 'daily';
+          const jobName = (document.getElementById('wf-wz-job-name')?.value || '').trim() || `openclaw-${keyword}-job`;
+          const cronExpr = (document.getElementById('wf-wz-cron')?.value || '').trim();
+          const timezone = (document.getElementById('wf-wz-timezone')?.value || 'Asia/Shanghai').trim();
+          const publish = Boolean(document.getElementById('wf-wz-publish')?.checked);
+          const boot = await fetchJson('/api/v1/public/workflow/monitor/bootstrap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword, cadence, source_profile: 'auto', platforms: ['news'], candidate_count: 10 }),
+          });
+          const monitorId = boot.monitor_id;
+          await fetchJson('/api/v1/public/workflow/external-configs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              job_name: jobName,
+              monitor_id: monitorId,
+              cron_expr: cronExpr || '*/30 * * * *',
+              timezone,
+              enabled: true,
+              retry_policy: 'no-retry',
+              notes: '由网页首次向导创建',
+            }),
+          });
+          if (publish) {
+            await fetchJson('/api/v1/public/workflow/analysis/run', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ monitor_id: monitorId, keyword, window_days: 7, news_hours: 72, horizon: '24h', publish: true }),
+            });
+          }
+          setWorkflowResult(`首次向导完成：monitor_id=${monitorId}`);
+          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
+        },
+      );
+    }
+
+    function openBootstrapModal() {
+      openWorkflowModal(
+        '创建监测任务',
+        `<div class="muted" style="font-size:13px;line-height:1.6;">
+          用途：仅创建 monitor（生成 monitor_id），不自动创建定时任务，也不会自动生成报告。
+          适合先建任务，再由 OpenClaw/外部定时任务持续采集。
+        </div>
+        <div class="workflow-form">
+          <label><strong>关键词（必填）</strong>：monitor 的核心标识。</label>
+          <input id="wf-bs-keyword" placeholder="例：现货黄金 / 白银 / 原油" />
+          <div class="muted" style="font-size:12px;">后续在监测列表、联合分析中会按该关键词聚合。</div>
+
+          <label><strong>采样节奏 cadence（必填）</strong></label>
+          <select id="wf-bs-cadence"><option value="hourly">hourly（小时级）</option><option value="daily" selected>daily（天级）</option></select>
+          <div class="muted" style="font-size:12px;">仅记录为任务元信息，不会自动执行定时。</div>
+
+          <label><strong>source_profile（可选）</strong>：来源画像。</label>
+          <select id="wf-bs-profile"><option value="auto" selected>auto（自动）</option><option value="commodity">commodity（大宗商品）</option><option value="ecommerce">ecommerce（电商）</option></select>
+          <div class="muted" style="font-size:12px;">默认部署下主要作为元信息；若开启服务端抓取时会影响候选 URL 策略。</div>
+        </div>`,
+        async () => {
+          const keyword = (document.getElementById('wf-bs-keyword')?.value || '').trim();
+          if (!keyword) throw new Error('请填写关键词。');
+          const cadence = document.getElementById('wf-bs-cadence')?.value || 'daily';
+          const sourceProfile = document.getElementById('wf-bs-profile')?.value || 'auto';
+          const data = await fetchJson('/api/v1/public/workflow/monitor/bootstrap', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keyword, cadence, source_profile: sourceProfile, platforms: ['news'], candidate_count: 10 }),
+          });
+          setWorkflowResult(`创建成功：monitor_id=${data.monitor_id || '-'}`);
+          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
+        },
+      );
+    }
+
+    function openConfigModal() {
+      const defaultMonitorId =
+        workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id ||
+        workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id ||
+        '';
+      openWorkflowModal(
+        '外部调度配置',
+        `<div class="muted" style="font-size:13px;line-height:1.6;">
+          用途：保存“外部调度配置元信息”（job_name / monitor_id / cron / 时区等）。
+          说明：本页面不直接执行系统 cron，实际执行仍由 OpenClaw 或外部调度器完成。
+        </div>
+        <div class="workflow-form">
+          <label><strong>job_name（必填）</strong>：外部调度任务唯一名。</label>
+          <input id="wf-cf-job-name" placeholder="例：openclaw-gold-ingest-30min" />
+          <div class="muted" style="font-size:12px;">建议稳定不变；运行历史会按该名称聚合。</div>
+
+          <label><strong>monitor_id（必填）</strong>：调度任务对应的监测任务 ID。</label>
+          <input id="wf-cf-monitor-id" placeholder="UUID monitor_id" value="${defaultMonitorId}" />
+          <div class="muted" style="font-size:12px;">可从“价格趋势”或本卡片状态中复制。</div>
+
+          <label><strong>cron 表达式（必填）</strong>：5段计划。</label>
+          <input id="wf-cf-cron" placeholder="例：*/30 * * * *" value="*/30 * * * *" />
+          <div class="muted" style="font-size:12px;">示例：0 * * * *（每小时）；0 9 * * *（每天9点）。</div>
+
+          <label><strong>timezone（必填）</strong>：时区。</label>
+          <input id="wf-cf-timezone" placeholder="例：Asia/Shanghai" value="Asia/Shanghai" />
+
+          <label><strong>retry_policy（可选）</strong>：失败策略。</label>
+          <select id="wf-cf-retry"><option value="no-retry" selected>no-retry（失败不重试）</option><option value="retry-3-exp">retry-3-exp（指数退避重试3次）</option></select>
+          <div class="muted" style="font-size:12px;">仅记录策略意图，实际由外部调度器/OpenClaw 任务实现。</div>
+
+          <label><strong>notes（可选）</strong>：运维备注。</label>
+          <textarea id="wf-cf-notes" placeholder="例：用于生产环境黄金30分钟采样"></textarea>
+          <div class="workflow-toggle"><input id="wf-cf-enabled" type="checkbox" checked />启用配置</div>
+          <div class="muted" style="font-size:12px;">关闭后仅表示“逻辑停用”，不会自动停止你外部系统里的真实 cron。</div>
+        </div>`,
+        async () => {
+          const payload = {
+            job_name: (document.getElementById('wf-cf-job-name')?.value || '').trim(),
+            monitor_id: (document.getElementById('wf-cf-monitor-id')?.value || '').trim(),
+            cron_expr: (document.getElementById('wf-cf-cron')?.value || '').trim(),
+            timezone: (document.getElementById('wf-cf-timezone')?.value || '').trim() || 'Asia/Shanghai',
+            retry_policy: document.getElementById('wf-cf-retry')?.value || 'no-retry',
+            notes: (document.getElementById('wf-cf-notes')?.value || '').trim() || null,
+            enabled: Boolean(document.getElementById('wf-cf-enabled')?.checked),
+          };
+          if (!payload.job_name || !payload.monitor_id || !payload.cron_expr) {
+            throw new Error('job_name / monitor_id / cron_expr 必填。');
+          }
+          await fetchJson('/api/v1/public/workflow/external-configs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          setWorkflowResult(`调度配置已保存：${payload.job_name}`);
+          await loadWorkflowState();
+        },
+      );
+    }
+
+    async function openAnalysisModal() {
+      const defaultMonitorId =
+        workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id ||
+        workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id ||
+        '';
+      const defaultKeyword = workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.keyword || '';
+      const monitors = await loadWorkflowMonitors().catch(() => []);
+      const monitorOptions = (monitors || []).map((m) => {
+        const id = String(m.monitor_id || '');
+        const keyword = String(m.keyword || '未命名关键词');
+        const obs = Number(m.observation_count || 0);
+        const selected = id === defaultMonitorId ? ' selected' : '';
+        return `<option value="${htmlEsc(id)}" data-keyword="${htmlEsc(keyword)}"${selected}>${htmlEsc(keyword)}（观测 ${obs}，ID ${htmlEsc(id.slice(0, 8))}）</option>`;
+      }).join('');
+
+      openWorkflowModal(
+        '触发联合分析',
+        `<div class="muted" style="font-size:13px;line-height:1.6;">
+          用途：手动触发一次“价格 + 新闻”联合分析。
+          你可以填写多个关键词（用逗号分隔）做联合新闻证据分析。
+        </div>
+        <div class="workflow-form">
+          <label><strong>选择价格监测任务（推荐）</strong>：可直接按关键词选择。</label>
+          <select id="wf-an-monitor-select" onchange="window.onWorkflowMonitorPicked && window.onWorkflowMonitorPicked(this)">
+            <option value="">-- 请选择已有监测任务 --</option>
+            ${monitorOptions}
+          </select>
+
+          <label><strong>monitor_id（必填）</strong>：自动带入，也可手工修改。</label>
+          <input id="wf-an-monitor-id" placeholder="UUID monitor_id" value="${htmlEsc(defaultMonitorId)}" />
+
+          <label><strong>联合关键词（可选，支持多个）</strong>：逗号、中文逗号或换行分隔。</label>
+          <textarea id="wf-an-keywords" placeholder="例：黄金, 美联储, 美元指数">${htmlEsc(defaultKeyword)}</textarea>
+          <div class="muted" style="font-size:12px;">留空时默认使用 monitor 对应关键词；填写多个时会联合检索新闻并去重分析。</div>
+
+          <label><strong>window_days（必填）</strong>：价格窗口天数。</label>
+          <input id="wf-an-window-days" type="number" min="1" max="365" value="7" />
+          <div class="muted" style="font-size:12px;">表示分析最近 N 天价格区间。</div>
+
+          <label><strong>news_hours（必填）</strong>：新闻回看小时数。</label>
+          <input id="wf-an-news-hours" type="number" min="1" max="720" value="72" />
+          <div class="muted" style="font-size:12px;">表示联合分析会读取最近 N 小时新闻。</div>
+
+          <label><strong>horizon（必填）</strong>：预测展望周期。</label>
+          <select id="wf-an-horizon"><option value="24h" selected>24h（未来24小时）</option><option value="72h">72h（未来72小时）</option><option value="7d">7d（未来7天）</option></select>
+
+          <div class="workflow-toggle"><input id="wf-an-publish" type="checkbox" checked />提交报告到服务器</div>
+          <div class="muted" style="font-size:12px;">勾选：会调用入站发布链路；不勾选：只返回分析结果，不落库。</div>
+        </div>`,
+        async () => {
+          const monitorId = (document.getElementById('wf-an-monitor-id')?.value || '').trim();
+          if (!monitorId) throw new Error('请先选择或填写 monitor_id。');
+          const rawKeywords = (document.getElementById('wf-an-keywords')?.value || '').trim();
+          const keywordList = rawKeywords
+            .split(/[,\\n，]/g)
+            .map((x) => x.trim())
+            .filter((x) => !!x);
+          const payload = {
+            monitor_id: monitorId,
+            keyword: keywordList[0] || null,
+            keywords: keywordList.length ? keywordList : null,
+            window_days: Number(document.getElementById('wf-an-window-days')?.value || 7),
+            news_hours: Number(document.getElementById('wf-an-news-hours')?.value || 72),
+            horizon: document.getElementById('wf-an-horizon')?.value || '24h',
+            publish: Boolean(document.getElementById('wf-an-publish')?.checked),
+          };
+          const out = await fetchJson('/api/v1/public/workflow/analysis/run', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          setWorkflowResult(
+            `分析完成：预测=${out.forecast || '-'}，置信度=${out.confidence || '-'}，关键词=${(out.keywords_used || []).join('、') || '-'}，ingest_id=${out.ingest_id || '-'}，状态=${out.ingest_status || '-'}`,
+          );
+          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
+        },
+      );
+
+      window.onWorkflowMonitorPicked = (selectEl) => {
+        const idInput = document.getElementById('wf-an-monitor-id');
+        const kwInput = document.getElementById('wf-an-keywords');
+        if (!selectEl || !idInput || !kwInput) return;
+        const monitorId = String(selectEl.value || '').trim();
+        idInput.value = monitorId;
+        const selected = selectEl.options?.[selectEl.selectedIndex];
+        const pickedKeyword = (selected && selected.dataset && selected.dataset.keyword) || '';
+        if (!kwInput.value.trim() && pickedKeyword) {
+          kwInput.value = pickedKeyword;
+        }
+      };
+    }
+
+    document.getElementById('wf-refresh-btn')?.addEventListener('click', async () => {
+      await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
+    });
+    document.getElementById('wf-open-wizard-btn')?.addEventListener('click', openWizardModal);
+    document.getElementById('wf-open-bootstrap-btn')?.addEventListener('click', openBootstrapModal);
+    document.getElementById('wf-open-config-btn')?.addEventListener('click', openConfigModal);
+    document.getElementById('wf-open-analysis-btn')?.addEventListener('click', openAnalysisModal);
+    wfModalCancelBtn?.addEventListener('click', closeWorkflowModal);
+    wfModalSubmitBtn?.addEventListener('click', async () => {
+      if (!wfModalSubmitHandler) return;
+      try {
+        wfModalSubmitBtn.disabled = true;
+        await wfModalSubmitHandler();
+        closeWorkflowModal();
+      } catch (e) {
+        setWorkflowResult(`操作失败：${e?.message || '未知错误'}`);
+      } finally {
+        wfModalSubmitBtn.disabled = false;
+      }
+    });
+    wfModal?.addEventListener('click', (e) => {
+      if (e.target === wfModal) closeWorkflowModal();
+    });
+    document.getElementById('dark-mode-btn')?.addEventListener('click', (e) => {
+      // Keep inline onclick behavior, but ensure button label sync even in cached pages.
+      e.currentTarget.blur();
+      setTimeout(syncDarkModeButtonLabel, 0);
+    });
 
     const chatMessages = document.getElementById('chat-messages');
     const chatInput = document.getElementById('openclaw-chat-input');
@@ -1360,7 +1832,9 @@ def index(page: str | None = None) -> HTMLResponse:
 
     setupDarkMode();
     loadOpenClawWorkOverview();
+    loadWorkflowState();
     setInterval(loadOpenClawWorkOverview, 30 * 60 * 1000);
+    setInterval(loadWorkflowState, 5 * 60 * 1000);
   </script>
 </body>
 </html>
@@ -2231,21 +2705,254 @@ def _monitoring_scheduler_status_public(app_obj: FastAPI) -> dict:
     }
 
 
-def _external_scheduler_jobs_public(app_obj: FastAPI) -> dict:
-    jobs = getattr(app_obj.state, "external_scheduler_jobs", {})
-    out = []
-    for job_name, item in jobs.items():
+def _ensure_external_scheduler_tables() -> None:
+    import psycopg
+
+    if not settings.monitoring_database_url:
+        return
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS external_scheduler_runs (
+              id BIGSERIAL PRIMARY KEY,
+              job_name TEXT NOT NULL,
+              status TEXT NOT NULL DEFAULT 'ok',
+              monitor_id UUID NULL,
+              message TEXT NULL,
+              last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+              source TEXT NOT NULL DEFAULT 'heartbeat'
+            );
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_external_scheduler_runs_job_last_seen
+              ON external_scheduler_runs (job_name, last_seen_at DESC);
+            """
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS external_scheduler_configs (
+              job_name TEXT PRIMARY KEY,
+              monitor_id UUID NOT NULL,
+              cron_expr TEXT NOT NULL,
+              timezone TEXT NOT NULL DEFAULT 'Asia/Shanghai',
+              enabled BOOLEAN NOT NULL DEFAULT TRUE,
+              retry_policy TEXT NOT NULL DEFAULT 'no-retry',
+              notes TEXT NULL,
+              updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+        conn.commit()
+
+
+def _save_external_scheduler_run(
+    *,
+    job_name: str,
+    status: str,
+    monitor_id: str | None,
+    message: str | None,
+    source: str = "heartbeat",
+) -> str:
+    now = datetime.now(timezone.utc).isoformat()
+    if not settings.monitoring_database_url:
+        return now
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO external_scheduler_runs (job_name, status, monitor_id, message, last_seen_at, source)
+            VALUES (%s, %s, NULLIF(%s, '')::uuid, %s, NOW(), %s)
+            RETURNING last_seen_at
+            """,
+            (job_name, status, monitor_id or "", message, source),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    ts = row[0].isoformat() if row and row[0] else now
+    return ts
+
+
+def _external_scheduler_jobs_from_db(limit: int = 120) -> list[dict]:
+    if not settings.monitoring_database_url:
+        return []
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT r.job_name, r.status, r.monitor_id, r.message, r.last_seen_at
+            FROM external_scheduler_runs r
+            JOIN (
+              SELECT job_name, MAX(last_seen_at) AS mx
+              FROM external_scheduler_runs
+              GROUP BY job_name
+            ) t ON t.job_name = r.job_name AND t.mx = r.last_seen_at
+            ORDER BY r.last_seen_at DESC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+    out: list[dict] = []
+    for job_name, status, monitor_id, message, last_seen_at in rows:
         out.append(
             {
                 "job_name": job_name,
-                "status": item.get("status"),
-                "monitor_id": item.get("monitor_id"),
-                "message": item.get("message"),
-                "last_seen_at": item.get("last_seen_at"),
+                "status": status,
+                "monitor_id": str(monitor_id) if monitor_id else None,
+                "message": message,
+                "last_seen_at": last_seen_at.isoformat() if last_seen_at else None,
             }
         )
-    out.sort(key=lambda x: x.get("last_seen_at") or "", reverse=True)
+    return out
+
+
+def _external_scheduler_jobs_public(app_obj: FastAPI) -> dict:
+    out = _external_scheduler_jobs_from_db(limit=120)
+    if not out:
+        jobs = getattr(app_obj.state, "external_scheduler_jobs", {})
+        for job_name, item in jobs.items():
+            out.append(
+                {
+                    "job_name": job_name,
+                    "status": item.get("status"),
+                    "monitor_id": item.get("monitor_id"),
+                    "message": item.get("message"),
+                    "last_seen_at": item.get("last_seen_at"),
+                }
+            )
+        out.sort(key=lambda x: x.get("last_seen_at") or "", reverse=True)
     return {"jobs": out}
+
+
+def _external_scheduler_run_history_public(limit: int = 120) -> dict:
+    if not settings.monitoring_database_url:
+        return {"runs": []}
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT job_name, status, monitor_id, message, last_seen_at, source
+            FROM external_scheduler_runs
+            ORDER BY last_seen_at DESC, id DESC
+            LIMIT %s
+            """,
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+    runs: list[dict] = []
+    for job_name, status, monitor_id, message, last_seen_at, source in rows:
+        runs.append(
+            {
+                "job_name": job_name,
+                "status": status,
+                "monitor_id": str(monitor_id) if monitor_id else None,
+                "message": message,
+                "last_seen_at": last_seen_at.isoformat() if last_seen_at else None,
+                "source": source,
+            }
+        )
+    return {"runs": runs}
+
+
+def _external_scheduler_configs_public() -> dict:
+    if not settings.monitoring_database_url:
+        return {"configs": []}
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT job_name, monitor_id, cron_expr, timezone, enabled, retry_policy, notes, updated_at
+            FROM external_scheduler_configs
+            ORDER BY updated_at DESC, job_name ASC
+            """
+        )
+        rows = cur.fetchall()
+    configs: list[dict] = []
+    for job_name, monitor_id, cron_expr, tz, enabled, retry_policy, notes, updated_at in rows:
+        configs.append(
+            {
+                "job_name": job_name,
+                "monitor_id": str(monitor_id),
+                "cron_expr": cron_expr,
+                "timezone": tz,
+                "enabled": bool(enabled),
+                "retry_policy": retry_policy,
+                "notes": notes,
+                "updated_at": updated_at.isoformat() if updated_at else None,
+            }
+        )
+    return {"configs": configs}
+
+
+def _upsert_external_scheduler_config(payload: ExternalSchedulerConfigRequest) -> dict:
+    if not settings.monitoring_database_url:
+        raise HTTPException(status_code=503, detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。")
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO external_scheduler_configs (
+              job_name, monitor_id, cron_expr, timezone, enabled, retry_policy, notes, updated_at
+            )
+            VALUES (%s, %s::uuid, %s, %s, %s, %s, %s, NOW())
+            ON CONFLICT (job_name) DO UPDATE SET
+              monitor_id = EXCLUDED.monitor_id,
+              cron_expr = EXCLUDED.cron_expr,
+              timezone = EXCLUDED.timezone,
+              enabled = EXCLUDED.enabled,
+              retry_policy = EXCLUDED.retry_policy,
+              notes = EXCLUDED.notes,
+              updated_at = NOW()
+            RETURNING updated_at
+            """,
+            (
+                payload.job_name,
+                payload.monitor_id,
+                payload.cron_expr,
+                payload.timezone,
+                payload.enabled,
+                payload.retry_policy,
+                payload.notes,
+            ),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    return {"ok": True, "job_name": payload.job_name, "updated_at": row[0].isoformat() if row else None}
+
+
+def _toggle_external_scheduler_config(job_name: str, enabled: bool) -> dict:
+    if not settings.monitoring_database_url:
+        raise HTTPException(status_code=503, detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。")
+    import psycopg
+
+    _ensure_external_scheduler_tables()
+    with psycopg.connect(settings.monitoring_database_url) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE external_scheduler_configs
+            SET enabled = %s, updated_at = NOW()
+            WHERE job_name = %s
+            RETURNING updated_at
+            """,
+            (enabled, job_name),
+        )
+        row = cur.fetchone()
+        conn.commit()
+    if not row:
+        raise HTTPException(status_code=404, detail="job_name not found")
+    return {"ok": True, "job_name": job_name, "enabled": enabled, "updated_at": row[0].isoformat()}
 
 
 def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
@@ -2393,11 +3100,17 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
         except Exception as exc:  # noqa: BLE001
             news["error"] = str(exc)
 
+    workflow: dict = {
+        "scheduler_configs": _external_scheduler_configs_public().get("configs", []),
+        "recent_runs": _external_scheduler_run_history_public(limit=12).get("runs", []),
+    }
+
     return {
         "reports": reports,
         "price_monitoring": price,
         "news_library": news,
         "external_cron": {"job_count": len(jobs), "jobs": jobs},
+        "workflow": workflow,
         "refresh_hint_seconds": 1800,
     }
 
@@ -2447,6 +3160,7 @@ def _sentiment_from_text(text: str) -> str:
 def _build_news_price_analysis(
     monitor_id: str,
     keyword: str | None,
+    keywords: list[str] | None,
     window_days: int,
     news_hours: int,
     horizon: str,
@@ -2462,11 +3176,35 @@ def _build_news_price_analysis(
     effective_keyword = (keyword or summary.get("keyword") or "").strip()
     if not effective_keyword:
         effective_keyword = "未命名关键词"
+    keywords_used = [str(x).strip() for x in (keywords or []) if str(x).strip()]
+    if effective_keyword and effective_keyword not in keywords_used:
+        keywords_used.insert(0, effective_keyword)
+    if not keywords_used:
+        keywords_used = [effective_keyword]
 
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=max(1, news_hours))
     recent_news = []
-    for item in _list_news_library_from_db(limit=300, keyword=effective_keyword):
+    news_pool: list[dict] = []
+    # Multi-keyword union: query each keyword and de-duplicate by id/url.
+    for kw in keywords_used:
+        news_pool.extend(_list_news_library_from_db(limit=180, keyword=kw))
+    seen_ids: set[int] = set()
+    seen_urls: set[str] = set()
+    deduped_news: list[dict] = []
+    for item in news_pool:
+        iid = int(item.get("id") or 0)
+        url = str(item.get("source_url") or "").strip()
+        if iid and iid in seen_ids:
+            continue
+        if url and url in seen_urls:
+            continue
+        if iid:
+            seen_ids.add(iid)
+        if url:
+            seen_urls.add(url)
+        deduped_news.append(item)
+    for item in deduped_news:
         ts = _parse_iso_dt(item.get("published_at")) or _parse_iso_dt(item.get("created_at"))
         if not ts:
             continue
@@ -2530,7 +3268,7 @@ def _build_news_price_analysis(
     analysis = (
         f"{effective_keyword} 在近{window_days}天价格区间为 {summary.get('min_price')}~{summary.get('max_price')}，"
         f"最新价格 {summary.get('latest_price')}，当前走势判断为{trend}。"
-        f"结合近{news_hours}小时新闻（利多{bullish} / 利空{bearish} / 中性{neutral}），"
+        f"结合近{news_hours}小时新闻（关键词：{'、'.join(keywords_used)}；利多{bullish} / 利空{bearish} / 中性{neutral}），"
         f"预测未来{horizon}倾向{forecast}，置信度{confidence}。"
         f"若后续出现与当前判断相反的高优先级事件，结论可能快速失效。\n\n关键新闻证据：\n{news_evidence}"
     )
@@ -2543,10 +3281,71 @@ def _build_news_price_analysis(
         "horizon": horizon,
         "summary": summary,
         "news_count": len(recent_news),
+        "keywords_used": keywords_used,
         "key_news": key_news,
         "forecast": forecast,
         "confidence": confidence,
         "analysis": analysis,
+    }
+
+
+def _run_news_trigger_analysis(
+    *,
+    monitor_id: str,
+    keyword: str | None,
+    keywords: list[str] | None,
+    window_days: int,
+    news_hours: int,
+    horizon: str,
+    publish: bool,
+    background_tasks: BackgroundTasks,
+) -> dict:
+    result = _build_news_price_analysis(
+        monitor_id=monitor_id,
+        keyword=keyword,
+        keywords=keywords,
+        window_days=window_days,
+        news_hours=news_hours,
+        horizon=horizon,
+    )
+    ingest_id = None
+    ingest_status = None
+    if publish:
+        now = datetime.now(timezone.utc)
+        report = OpenClawReportIn(
+            task_id=f"news-trigger-{monitor_id}-{int(now.timestamp())}",
+            keyword=result["keyword"],
+            time_range={"start": (now - timedelta(days=window_days)), "end": now},
+            sources=["monitoring-summary", "news-library"],
+            items=[
+                {
+                    "title": n.get("title") or "未命名新闻",
+                    "source": n.get("source_name") or "unknown",
+                    "url": n.get("source_url") or "",
+                    "published_at": _parse_iso_dt(n.get("published_at"))
+                    or _parse_iso_dt(n.get("created_at"))
+                    or now,
+                    "summary": n.get("summary"),
+                }
+                for n in result["key_news"]
+                if n.get("source_url")
+            ],
+            analysis=result["analysis"],
+            generated_title=f"{result['keyword']} 新闻触发价格分析（{horizon}）",
+            generated_at=now,
+        )
+        ingest_id, ingest_status = intake_service.ingest(
+            report=report,
+            request_id=f"news-trigger-{monitor_id}-{int(now.timestamp())}",
+            background_tasks=background_tasks,
+        )
+    return {
+        "ok": True,
+        "mode": "event_triggered",
+        "publish": publish,
+        "ingest_id": ingest_id,
+        "ingest_status": ingest_status,
+        **result,
     }
 
 
@@ -2627,13 +3426,90 @@ def public_monitoring_observations(monitor_id: str, limit: int = 200) -> dict:
     return _monitor_observations_public(monitor_id=monitor_id, limit=cap_limit)
 
 
+@app.get("/api/v1/public/workflow/state", summary="网页工作流总览状态")
+def public_workflow_state(request: Request) -> dict:
+    overview = _openclaw_work_overview_public(request.app)
+    scheduler = _monitoring_scheduler_status_public(request.app)
+    configs = _external_scheduler_configs_public()
+    runs = _external_scheduler_run_history_public(limit=60)
+    return {
+        "overview": overview,
+        "internal_scheduler": scheduler,
+        "external_scheduler_configs": configs.get("configs", []),
+        "external_scheduler_runs": runs.get("runs", []),
+    }
+
+
+@app.get("/api/v1/public/workflow/external-runs", summary="外部调度运行历史")
+def public_workflow_external_runs(limit: int = 120) -> dict:
+    cap_limit = max(1, min(int(limit), 500))
+    return _external_scheduler_run_history_public(limit=cap_limit)
+
+
+@app.get("/api/v1/public/workflow/external-configs", summary="外部调度配置列表")
+def public_workflow_external_configs() -> dict:
+    return _external_scheduler_configs_public()
+
+
+@app.post("/api/v1/public/workflow/external-configs", summary="保存外部调度配置")
+def public_workflow_external_config_upsert(payload: ExternalSchedulerConfigRequest) -> dict:
+    return _upsert_external_scheduler_config(payload)
+
+
+@app.post("/api/v1/public/workflow/external-configs/{job_name}/toggle", summary="启停外部调度配置")
+def public_workflow_external_config_toggle(job_name: str, payload: ExternalSchedulerToggleRequest) -> dict:
+    return _toggle_external_scheduler_config(job_name=job_name, enabled=payload.enabled)
+
+
+@app.post("/api/v1/public/workflow/monitor/bootstrap", summary="网页创建监测任务")
+def public_workflow_monitor_bootstrap(payload: WorkflowBootstrapRequest) -> dict:
+    if not settings.monitoring_database_url:
+        raise HTTPException(status_code=503, detail="未配置 OPENCLAW_MONITORING_DATABASE_URL。")
+    from app.schemas.monitoring import BootstrapMonitoringRequest
+
+    req = BootstrapMonitoringRequest(
+        keyword=payload.keyword,
+        candidate_count=max(1, min(int(payload.candidate_count), 60)),
+        platforms=list(payload.platforms or ["news"]),
+        source_profile=payload.source_profile or "auto",
+        cadence=payload.cadence or "daily",
+    )
+    svc = MonitoringService(
+        settings.monitoring_database_url,
+        allow_server_scrape=settings.monitoring_allow_server_scrape,
+    )
+    return svc.bootstrap(req)
+
+
+@app.post("/api/v1/public/workflow/analysis/run", summary="网页触发联合分析并可选发布")
+def public_workflow_analysis_run(payload: WorkflowTriggerRequest, background_tasks: BackgroundTasks) -> dict:
+    window_days = max(1, min(int(payload.window_days), 365))
+    news_hours = max(1, min(int(payload.news_hours), 24 * 30))
+    return _run_news_trigger_analysis(
+        monitor_id=payload.monitor_id,
+        keyword=payload.keyword,
+        keywords=payload.keywords,
+        window_days=window_days,
+        news_hours=news_hours,
+        horizon=payload.horizon,
+        publish=payload.publish,
+        background_tasks=background_tasks,
+    )
+
+
 @app.post("/api/v1/openclaw/monitoring/external-heartbeat", summary="上报外部定时任务心跳")
 def report_external_scheduler_heartbeat(
     payload: ExternalSchedulerHeartbeatRequest,
     request: Request,
     _: None = Depends(verify_api_key),
 ) -> dict:
-    now = datetime.now(timezone.utc).isoformat()
+    now = _save_external_scheduler_run(
+        job_name=payload.job_name,
+        status=payload.status,
+        monitor_id=payload.monitor_id,
+        message=payload.message,
+        source="heartbeat",
+    )
     request.app.state.external_scheduler_jobs[payload.job_name] = {
         "status": payload.status,
         "monitor_id": payload.monitor_id,
@@ -2651,53 +3527,16 @@ def trigger_news_price_analysis(
 ) -> dict:
     window_days = max(1, min(int(payload.window_days), 365))
     news_hours = max(1, min(int(payload.news_hours), 24 * 30))
-    result = _build_news_price_analysis(
+    return _run_news_trigger_analysis(
         monitor_id=payload.monitor_id,
         keyword=payload.keyword,
+        keywords=None,
         window_days=window_days,
         news_hours=news_hours,
         horizon=payload.horizon,
+        publish=payload.publish,
+        background_tasks=background_tasks,
     )
-    ingest_id = None
-    ingest_status = None
-    if payload.publish:
-        now = datetime.now(timezone.utc)
-        report = OpenClawReportIn(
-            task_id=f"news-trigger-{payload.monitor_id}-{int(now.timestamp())}",
-            keyword=result["keyword"],
-            time_range={"start": (now - timedelta(days=window_days)), "end": now},
-            sources=["monitoring-summary", "news-library"],
-            items=[
-                {
-                    "title": n.get("title") or "未命名新闻",
-                    "source": n.get("source_name") or "unknown",
-                    "url": n.get("source_url") or "",
-                    "published_at": _parse_iso_dt(n.get("published_at"))
-                    or _parse_iso_dt(n.get("created_at"))
-                    or now,
-                    "summary": n.get("summary"),
-                }
-                for n in result["key_news"]
-                if n.get("source_url")
-            ],
-            analysis=result["analysis"],
-            generated_title=f"{result['keyword']} 新闻触发价格分析（{payload.horizon}）",
-            generated_at=now,
-        )
-        ingest_id, ingest_status = intake_service.ingest(
-            report=report,
-            request_id=f"news-trigger-{payload.monitor_id}-{int(now.timestamp())}",
-            background_tasks=background_tasks,
-        )
-
-    return {
-        "ok": True,
-        "mode": "event_triggered",
-        "publish": payload.publish,
-        "ingest_id": ingest_id,
-        "ingest_status": ingest_status,
-        **result,
-    }
 
 
 @app.post("/api/v1/public/reports/bulk-delete", summary="批量删除报告")

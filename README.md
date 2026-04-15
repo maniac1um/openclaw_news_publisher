@@ -33,7 +33,7 @@
   - 会话在浏览器本地持久化（`localStorage`）：刷新/切页可恢复，支持“删除当前会话”和“清空缓存”
   - 当前为单设备本地持久化；多设备同步建议见 `docs/architecture/news-pipeline.md`（对话持久化演进）
 - 用户页面与公开查询 API
-  - `/`（新闻动态：首页报告列表 + Markdown 详情）
+  - `/`（门户首页：OpenClaw 对话 + 工作情况 + 网页化工作流控制台）
   - `/topic-analysis`（专题分析：开发中）
   - `/price-trend`（价格趋势：开发中）
   - `/keyword-tracking`（关键词追踪：开发中）
@@ -42,6 +42,14 @@
   - `POST /api/v1/public/reports/bulk-delete`（批量删除）
   - `GET /api/v1/public/monitoring/scheduler-status`（内部调度器状态）
   - `GET /api/v1/public/monitoring/external-jobs`（外部任务最近心跳）
+  - 网页工作流控制台 API
+    - `GET /api/v1/public/workflow/state`
+    - `POST /api/v1/public/workflow/monitor/bootstrap`
+    - `POST /api/v1/public/workflow/analysis/run`
+    - `GET /api/v1/public/workflow/external-configs`
+    - `POST /api/v1/public/workflow/external-configs`
+    - `POST /api/v1/public/workflow/external-configs/{job_name}/toggle`
+    - `GET /api/v1/public/workflow/external-runs`
 - 文档与运维
   - `/docs`（Swagger）
   - `/healthz`（健康检查）
@@ -611,6 +619,48 @@ curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
 ```
 
 若已设置 **`OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE=true`**，可将上述 `ingest` 步骤替换为 `POST .../run-once` 作为旧版流程。
+
+### 4) 运行历史持久化（新增）
+
+从当前版本开始，`external-heartbeat` 不再只维护进程内最近状态；会同步写入监测库中的运行历史：
+
+- `external_scheduler_runs`（运行事件流：job/status/monitor_id/message/last_seen_at/source）
+- `external_scheduler_configs`（网页调度配置：cron/timezone/enabled/retry_policy）
+
+这使得服务重启后仍可在门户端查看运行历史与配置状态。
+
+## 网页化工作流控制台（门户首页）
+
+门户首页新增“网页化工作流控制台”，用于把原本依赖脚本/API 的关键操作搬到页面内：
+
+- 首次向导（关键词 -> monitor -> 外部调度配置 -> 可选立即触发联合分析）
+- 一键创建监测任务（bootstrap）
+- 一键保存/启停外部调度配置
+- 一键触发新闻+价格联合分析并可选发布
+- 查看最近外部调度运行历史（支持失败排障）
+
+### 控制台 API 清单
+
+- `GET /api/v1/public/workflow/state`
+- `GET /api/v1/public/workflow/external-runs?limit=120`
+- `GET /api/v1/public/workflow/external-configs`
+- `POST /api/v1/public/workflow/external-configs`
+- `POST /api/v1/public/workflow/external-configs/{job_name}/toggle`
+- `POST /api/v1/public/workflow/monitor/bootstrap`
+- `POST /api/v1/public/workflow/analysis/run`
+
+### 快速调用示例（workflow/state）
+
+```bash
+curl -sS "http://127.0.0.1:8000/api/v1/public/workflow/state"
+```
+
+返回字段（节选）：
+
+- `overview`：沿用门户工作情况聚合（报告/价格/新闻/external_cron）
+- `internal_scheduler`：内部 scheduler 状态
+- `external_scheduler_configs`：外部调度配置列表
+- `external_scheduler_runs`：最近运行事件（含 status/message/last_seen_at）
 
 ## 门户端删除接口（可复用）
 

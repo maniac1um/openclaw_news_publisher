@@ -27,3 +27,7 @@ htmlcov/
 
 # Local planning notes (do not commit)
 /local_notes/
+
+# Local backup artifacts and private runbook
+/backups/
+/docs/backup-and-restore.md

@@ -13,6 +13,16 @@ def run_git(args: list[str]) -> str:
     return proc.stdout.strip()
 
 
+def is_git_ignored(pathspec: str) -> bool:
+    proc = subprocess.run(
+        ["git", "check-ignore", "-q", pathspec],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return proc.returncode == 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Publish rendered report into site pipeline.")
     parser.add_argument("--rendered", required=True, help="Rendered report JSON path")
@@ -31,6 +41,12 @@ def main() -> int:
         rendered_rel = str(rendered.resolve().relative_to(repo_root.resolve()).as_posix())
     except ValueError:
         rendered_rel = str(rendered.resolve().as_posix())
+
+    # Runtime-rendered report JSON is often intentionally ignored in git.
+    # In that case we treat publish as a no-op instead of failing ingestion.
+    if is_git_ignored(rendered_rel):
+        print(f"skip git publish for ignored path: {rendered_rel}")
+        return 0
 
     run_git(["add", rendered_rel])
     staged = run_git(["diff", "--cached", "--name-only"])

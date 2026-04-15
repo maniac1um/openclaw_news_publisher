@@ -175,7 +175,7 @@ def index(page: str | None = None) -> HTMLResponse:
           <input id="keyword-search" placeholder="输入关键词筛选" />
           <span class="sort-field"><label for="news-sort">排序</label><select id="news-sort" title="列表排序方式">
             <option value="time:asc">按时间顺序（早→晚）</option>
-            <option value="time:desc">按时间逆序（晚→早）</option>
+            <option value="time:desc" selected>按时间逆序（晚→早）</option>
           </select></span>
           <button id="refresh-btn">刷新</button>
           <button id="delete-btn" class="danger">删除选中</button>
@@ -3046,9 +3046,9 @@ def price_trend_page() -> HTMLResponse:
             <select id="window-select">
               <option value="1">1天（24小时）</option>
               <option value="3">3天</option>
-              <option value="7">7天</option>
+              <option value="7" selected>7天</option>
               <option value="14">14天</option>
-              <option value="30" selected>30天</option>
+              <option value="30">30天</option>
               <option value="90">90天</option>
             </select>
             <button id="refresh-detail-btn">刷新详情</button>
@@ -3233,6 +3233,17 @@ def price_trend_page() -> HTMLResponse:
       }
       const minTs = Math.min(...points.map((p) => p.ts));
       const maxTs = Math.max(...points.map((p) => p.ts));
+      // Keep dense charts readable: more points => thinner line/smaller markers.
+      const density = points.length / Math.max(w, 1);
+      let lineWidth = 1.8;
+      let pointRadius = 2.2;
+      if (density >= 0.45) {
+        lineWidth = 1.0;
+        pointRadius = 1.2;
+      } else if (density >= 0.22) {
+        lineWidth = 1.3;
+        pointRadius = 1.6;
+      }
       const yTicks = 4;
       ctx.strokeStyle = grid;
       ctx.lineWidth = 1;
@@ -3283,9 +3294,9 @@ def price_trend_page() -> HTMLResponse:
       ctx.fill(areaPath);
 
       ctx.strokeStyle = brand;
-      ctx.lineWidth = 2.6;
+      ctx.lineWidth = lineWidth;
       ctx.shadowColor = 'rgba(11,79,163,0.22)';
-      ctx.shadowBlur = 6;
+      ctx.shadowBlur = density >= 0.22 ? 0 : 3;
       ctx.stroke(linePath);
       ctx.shadowBlur = 0;
       // Draw point markers so single-point data is still visible.
@@ -3294,7 +3305,7 @@ def price_trend_page() -> HTMLResponse:
         const x = padLeft + ((p.ts - minTs) / Math.max(maxTs - minTs, 1)) * w;
         const y = padTop + (1 - ((p.value - minV) / Math.max(maxV - minV, 1e-9))) * h;
         ctx.beginPath();
-        ctx.arc(x, y, 3.1, 0, Math.PI * 2);
+        ctx.arc(x, y, pointRadius, 0, Math.PI * 2);
         ctx.fill();
       });
       ctx.fillStyle = text;
@@ -3327,12 +3338,12 @@ def price_trend_page() -> HTMLResponse:
         ctx.setLineDash([]);
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
-        ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+        ctx.arc(hp.x, hp.y, pointRadius + 2.2, 0, Math.PI * 2);
         ctx.fill();
         ctx.strokeStyle = brand;
-        ctx.lineWidth = 2;
+        ctx.lineWidth = Math.max(1.2, lineWidth);
         ctx.beginPath();
-        ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+        ctx.arc(hp.x, hp.y, pointRadius + 2.2, 0, Math.PI * 2);
         ctx.stroke();
         ctx.restore();
       }

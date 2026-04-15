@@ -139,8 +139,11 @@ def index(page: str | None = None) -> HTMLResponse:
     .page { display:grid; grid-template-columns: 380px 1fr; gap:18px; padding-bottom:20px; }
     .left, .right { background:var(--surface); border:1px solid var(--line); border-radius:14px; }
     .panel-title { margin:0; font-size:18px; border-bottom:1px solid var(--line); padding:12px 14px; background:var(--surface-2); }
-    .toolbar { display:flex; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); }
-    .toolbar input, .toolbar button { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:7px 10px; border-radius:12px; }
+    .toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:10px 14px; border-bottom:1px solid var(--line); }
+    .toolbar input, .toolbar button, .toolbar select { border:1px solid var(--line); background:var(--surface); color:var(--text); padding:7px 10px; border-radius:12px; }
+    .toolbar select { max-width:min(220px, 100%); cursor:pointer; }
+    .toolbar .sort-field { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--muted); white-space:nowrap; }
+    .toolbar .sort-field select { color:var(--text); }
     .toolbar button.danger { border-color:#b42318; color:#b42318; background:transparent; }
     #news-list { list-style:none; margin:0; padding:0; max-height: calc(100vh - 245px); overflow:auto; }
     .pager { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 14px 12px; border-top:1px solid var(--line); }
@@ -170,6 +173,10 @@ def index(page: str | None = None) -> HTMLResponse:
         <h2 class="panel-title">新闻库条目</h2>
         <div class="toolbar">
           <input id="keyword-search" placeholder="输入关键词筛选" />
+          <span class="sort-field"><label for="news-sort">排序</label><select id="news-sort" title="列表排序方式">
+            <option value="time:asc">按时间顺序（早→晚）</option>
+            <option value="time:desc">按时间逆序（晚→早）</option>
+          </select></span>
           <button id="refresh-btn">刷新</button>
           <button id="delete-btn" class="danger">删除选中</button>
         </div>
@@ -197,10 +204,68 @@ def index(page: str | None = None) -> HTMLResponse:
     function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); }
     function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); }
     function escapeHtml(text) { return String(text ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll(\"'\",'&#039;'); }
+    function formatCnLocalDateTime(raw) {
+      if (raw == null || raw === '') return '-';
+      const t = Date.parse(String(raw));
+      if (!Number.isFinite(t)) return String(raw);
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${y}年${mo}月${da}日${h}：${mi}`;
+    }
     function filteredNews() {
       const kw = document.getElementById('keyword-search').value.trim().toLowerCase();
       if (!kw) return newsCache;
       return newsCache.filter((n) => String(n.keyword || '').toLowerCase().includes(kw) || String(n.title || '').toLowerCase().includes(kw) || String(n.summary || '').toLowerCase().includes(kw));
+    }
+    /** 用于排序的时间戳：优先 published_at，否则 created_at；无法解析时为 0 */
+    function newsSortTimeMs(n) {
+      const s = n.published_at || n.created_at;
+      if (!s) return 0;
+      const t = Date.parse(String(s));
+      return Number.isFinite(t) ? t : 0;
+    }
+    /**
+     * 可扩展排序：option value 为 "维度:方向"，维度在 NEWS_SORT_COMPARATORS 注册。
+     * 方向 asc | desc；未知维度则保持原顺序。
+     */
+    const NEWS_SORT_COMPARATORS = {
+      time: (a, b, dir) => {
+        const ta = newsSortTimeMs(a);
+        const tb = newsSortTimeMs(b);
+        const cmp = ta === tb ? 0 : (ta < tb ? -1 : 1);
+        return dir === 'desc' ? -cmp : cmp;
+      },
+    };
+    function parseNewsSortSpec() {
+      const el = document.getElementById('news-sort');
+      const raw = (el && el.value) || 'time:asc';
+      const i = raw.indexOf(':');
+      if (i < 0) return { key: 'time', dir: 'asc' };
+      const key = raw.slice(0, i).trim() || 'time';
+      const dir = raw.slice(i + 1).trim() === 'desc' ? 'desc' : 'asc';
+      return { key, dir };
+    }
+    function compareNewsById(a, b) {
+      const ia = Number(a.id);
+      const ib = Number(b.id);
+      if (Number.isFinite(ia) && Number.isFinite(ib) && ia !== ib) return ia - ib;
+      return String(a.id || '').localeCompare(String(b.id || ''));
+    }
+    function sortNewsList(items, spec) {
+      const fn = NEWS_SORT_COMPARATORS[spec.key];
+      if (!fn) return items.slice();
+      return items.slice().sort((a, b) => {
+        const c = fn(a, b, spec.dir);
+        if (c !== 0) return c;
+        return compareNewsById(a, b);
+      });
+    }
+    function newsListForDisplay() {
+      return sortNewsList(filteredNews(), parseNewsSortSpec());
     }
     function getNewsPageSlice(arr) {
       const total = arr.length;
@@ -242,9 +307,9 @@ def index(page: str | None = None) -> HTMLResponse:
           <div>
             <div class="news-title">${escapeHtml(n.title || '未命名新闻')}</div>
             <div class="news-meta">关键词：${escapeHtml(n.keyword || '-')}</div>
-            <div class="news-meta">时间：${escapeHtml(n.published_at || n.created_at || '-')}</div>
+            <div class="news-meta">时间：${escapeHtml(formatCnLocalDateTime(n.published_at || n.created_at))}</div>
           </div>`;
-        li.onclick = (e) => { if (e.target && e.target.classList.contains('row-check')) return; activeId = n.id; renderList(filteredNews()); renderDetail(n); };
+        li.onclick = (e) => { if (e.target && e.target.classList.contains('row-check')) return; activeId = n.id; renderList(newsListForDisplay()); renderDetail(n); };
         const ck = li.querySelector('.row-check');
         ck?.addEventListener('click', (e) => e.stopPropagation());
         ck?.addEventListener('change', (e) => {
@@ -261,7 +326,7 @@ def index(page: str | None = None) -> HTMLResponse:
       box.innerHTML = `<h2>${escapeHtml(n.title || '未命名新闻')}</h2>
         <p><strong>关键词：</strong>${escapeHtml(n.keyword || '-')}</p>
         <p><strong>来源：</strong>${escapeHtml(n.source_name || '-')}</p>
-        <p><strong>发布时间：</strong>${escapeHtml(n.published_at || n.created_at || '-')}</p>
+        <p><strong>发布时间：</strong>${escapeHtml(formatCnLocalDateTime(n.published_at || n.created_at))}</p>
         <p><strong>新闻概述：</strong></p>
         <p>${escapeHtml(n.summary || '-')}</p>
         <p><strong>原文链接：</strong><a href="${escapeHtml(n.source_url || '#')}" target="_blank" rel="noreferrer">直达原文</a></p>`;
@@ -271,7 +336,7 @@ def index(page: str | None = None) -> HTMLResponse:
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       newsCache = Array.isArray(data) ? data : [];
-      const arr = filteredNews();
+      const arr = newsListForDisplay();
       newsPage = 1;
       renderList(arr);
       if (!activeId && arr.length) { activeId = arr[0].id; renderList(arr); renderDetail(arr[0]); }
@@ -290,13 +355,14 @@ def index(page: str | None = None) -> HTMLResponse:
       document.getElementById('news-detail').innerHTML = '<div class="muted">删除成功，请从左侧重新选择新闻。</div>';
       await loadNews();
     }
-    document.getElementById('keyword-search').addEventListener('input', () => { newsPage = 1; renderList(filteredNews()); });
-    document.getElementById('news-prev-btn').addEventListener('click', () => { newsPage -= 1; renderList(filteredNews()); });
-    document.getElementById('news-next-btn').addEventListener('click', () => { newsPage += 1; renderList(filteredNews()); });
+    document.getElementById('keyword-search').addEventListener('input', () => { newsPage = 1; renderList(newsListForDisplay()); });
+    document.getElementById('news-sort').addEventListener('change', () => { newsPage = 1; renderList(newsListForDisplay()); });
+    document.getElementById('news-prev-btn').addEventListener('click', () => { newsPage -= 1; renderList(newsListForDisplay()); });
+    document.getElementById('news-next-btn').addEventListener('click', () => { newsPage += 1; renderList(newsListForDisplay()); });
     document.getElementById('news-list').addEventListener('wheel', (e) => {
       const list = e.currentTarget;
       if (e.deltaY > 0 && list.scrollTop + list.clientHeight >= list.scrollHeight - 2) {
-        const arr = filteredNews();
+        const arr = newsListForDisplay();
         const maxPage = Math.max(1, Math.ceil(arr.length / NEWS_PAGE_SIZE));
         if (newsPage < maxPage) {
           e.preventDefault();
@@ -308,7 +374,7 @@ def index(page: str | None = None) -> HTMLResponse:
         if (newsPage > 1) {
           e.preventDefault();
           newsPage -= 1;
-          renderList(filteredNews());
+          renderList(newsListForDisplay());
           list.scrollTop = list.scrollHeight;
         }
       }
@@ -675,6 +741,18 @@ def index(page: str | None = None) -> HTMLResponse:
         document.body.classList.add('dark');
       }
     }
+    function formatCnLocalDateTime(raw) {
+      if (raw == null || raw === '') return '-';
+      const t = Date.parse(String(raw));
+      if (!Number.isFinite(t)) return String(raw);
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${y}年${mo}月${da}日${h}：${mi}`;
+    }
     function appendSectionHeading(list, title, metaText) {
       const li = document.createElement('li');
       li.className = 'status-item';
@@ -736,7 +814,7 @@ def index(page: str | None = None) -> HTMLResponse:
           appendSectionHeading(
             list,
             '报告发布',
-            '已发布 ' + rep.published_count + ' 条 · 最近更新：' + (rep.last_generated_at || '—'),
+            '已发布 ' + rep.published_count + ' 条 · 最近更新：' + (rep.last_generated_at ? formatCnLocalDateTime(rep.last_generated_at) : '—'),
           );
           const top = rep.recent || [];
           if (!top.length) {
@@ -755,7 +833,7 @@ def index(page: str | None = None) -> HTMLResponse:
               const li = document.createElement('li');
               li.className = 'status-item';
               const title = r.title || '未命名报告';
-              const meta = r.generated_at || '-';
+              const meta = r.generated_at ? formatCnLocalDateTime(r.generated_at) : '-';
               const id = r.ingest_id;
               if (id) {
                 const a = document.createElement('a');
@@ -803,7 +881,7 @@ def index(page: str | None = None) -> HTMLResponse:
               ' 个 · 累计观测 ' +
               pr.observation_count +
               ' 条 · 最近采样：' +
-              (pr.last_captured_at || '—'),
+              (pr.last_captured_at ? formatCnLocalDateTime(pr.last_captured_at) : '—'),
           );
           const recentMonitors = Array.isArray(pr.recent) ? pr.recent : [];
           for (const m of recentMonitors.slice(0, 6)) {
@@ -812,7 +890,7 @@ def index(page: str | None = None) -> HTMLResponse:
               (m.keyword || '未命名关键词') + '（' + (m.monitor_id || '-').slice(0, 8) + '）',
               [
                 '观测数：' + (m.observation_count ?? 0),
-                '最近采样：' + (m.last_captured_at || '—'),
+                '最近采样：' + (m.last_captured_at ? formatCnLocalDateTime(m.last_captured_at) : '—'),
               ],
             );
           }
@@ -827,7 +905,7 @@ def index(page: str | None = None) -> HTMLResponse:
           appendSectionHeading(
             list,
             '新闻动态监测（新闻库）',
-            '库内 ' + nw.item_count + ' 条 · 最近入库：' + (nw.last_created_at || '—'),
+            '库内 ' + nw.item_count + ' 条 · 最近入库：' + (nw.last_created_at ? formatCnLocalDateTime(nw.last_created_at) : '—'),
           );
           const keywordRows = Array.isArray(nw.recent_keywords) ? nw.recent_keywords : [];
           for (const row of keywordRows.slice(0, 6)) {
@@ -836,7 +914,10 @@ def index(page: str | None = None) -> HTMLResponse:
               row.keyword || '未命名关键词',
               [
                 '条目数：' + (row.item_count ?? 0),
-                '最近事件时间：' + (row.last_event_at || row.last_created_at || '—'),
+                '最近事件时间：' +
+                  (row.last_event_at || row.last_created_at
+                    ? formatCnLocalDateTime(row.last_event_at || row.last_created_at)
+                    : '—'),
               ],
             );
           }
@@ -867,7 +948,7 @@ def index(page: str | None = None) -> HTMLResponse:
               (job.job_name || '-') + '（' + (job.status || 'unknown') + '）',
               [
                 'monitor_id: ' + (job.monitor_id || '-'),
-                'last_seen_at: ' + (job.last_seen_at || '-'),
+                'last_seen_at: ' + formatCnLocalDateTime(job.last_seen_at || ''),
                 'message: ' + (job.message || '-'),
               ],
             );
@@ -1530,6 +1611,19 @@ def index(page: str | None = None) -> HTMLResponse:
         .replaceAll("'", '&#039;');
     }
 
+    function formatCnLocalDateTime(raw) {
+      if (raw == null || raw === '') return '-';
+      const t = Date.parse(String(raw));
+      if (!Number.isFinite(t)) return String(raw);
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${y}年${mo}月${da}日${h}：${mi}`;
+    }
+
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
@@ -1594,7 +1688,9 @@ def index(page: str | None = None) -> HTMLResponse:
       lines.push(`# ${r.title || '未命名报告'}`);
       lines.push('');
       lines.push(`- **关键词**：${r.keyword || '-'}`);
-      lines.push(`- **时间范围**：${r.time_range?.start || '-'} ~ ${r.time_range?.end || '-'}`);
+      lines.push(
+        `- **时间范围**：${formatCnLocalDateTime(r.time_range?.start || '')} ~ ${formatCnLocalDateTime(r.time_range?.end || '')}`,
+      );
       lines.push(`- **来源**：${(r.sources || []).join('、') || '-'}`);
       lines.push(`- **条目数**：${r.items_count || 0}`);
       lines.push('');
@@ -1607,7 +1703,7 @@ def index(page: str | None = None) -> HTMLResponse:
       } else {
         for (const item of r.items.slice(0, 12)) {
           lines.push(`- **${item.title || '未命名'}**（${item.source || '-'}）`);
-          lines.push(`  - 发布时间：${item.published_at || '-'}`);
+          lines.push(`  - 发布时间：${formatCnLocalDateTime(item.published_at || '')}`);
           if (item.price !== undefined && item.price !== null) lines.push(`  - 价格：${item.price} ${item.currency || ''}`.trim());
           if (item.summary) lines.push(`  - 摘要：${item.summary}`);
           if (item.url) lines.push(`  - 链接：[查看原文](${item.url})`);
@@ -1636,7 +1732,7 @@ def index(page: str | None = None) -> HTMLResponse:
           <div>
             <div class="report-title">${escapeHtml(r.title || '未命名报告')}</div>
             <div class="report-meta">关键词：${escapeHtml(r.keyword || '-')}</div>
-            <div class="report-meta">时间：${escapeHtml(r.generated_at || '-')}</div>
+            <div class="report-meta">时间：${escapeHtml(formatCnLocalDateTime(r.generated_at || ''))}</div>
           </div>
         `;
         const checkbox = li.querySelector('.row-check');
@@ -1909,7 +2005,9 @@ def _report_to_markdown(report: dict) -> str:
     lines.append("")
     lines.append(f"- **关键词**：{report.get('keyword') or '-'}")
     time_range = report.get("time_range") or {}
-    lines.append(f"- **时间范围**：{time_range.get('start', '-')} ~ {time_range.get('end', '-')}")
+    lines.append(
+        f"- **时间范围**：{_format_cn_local_datetime(time_range.get('start'))} ~ {_format_cn_local_datetime(time_range.get('end'))}"
+    )
     lines.append(f"- **来源**：{'、'.join(report.get('sources') or []) or '-'}")
     lines.append(f"- **条目数**：{report.get('items_count') or 0}")
     lines.append("")
@@ -1923,7 +2021,7 @@ def _report_to_markdown(report: dict) -> str:
     else:
         for item in items[:12]:
             lines.append(f"- **{item.get('title') or '未命名'}**（{item.get('source') or '-'}）")
-            lines.append(f"  - 发布时间：{item.get('published_at') or '-'}")
+            lines.append(f"  - 发布时间：{_format_cn_local_datetime(item.get('published_at'))}")
             if item.get("price") is not None:
                 lines.append(f"  - 价格：{item.get('price')} {item.get('currency') or ''}".rstrip())
             if item.get("summary"):
@@ -2312,6 +2410,25 @@ def _parse_iso_dt(value: str | None) -> datetime | None:
         return datetime.fromisoformat(normalized)
     except Exception:  # noqa: BLE001
         return None
+
+
+def _format_cn_local_datetime(value: object) -> str:
+    """与门户各页 JS `formatCnLocalDateTime` 一致：本地 YYYY年MM月DD日HH：MM。"""
+    if value is None:
+        return "-"
+    if isinstance(value, str) and not value.strip():
+        return "-"
+    dt: datetime | None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        dt = _parse_iso_dt(str(value).strip())
+    if dt is None:
+        return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone()
+    return dt.strftime("%Y年%m月%d日%H\uff1a%M")
 
 
 def _sentiment_from_text(text: str) -> str:
@@ -2986,6 +3103,19 @@ def price_trend_page() -> HTMLResponse:
         .replaceAll("'", '&#039;');
     }
 
+    function formatCnLocalDateTime(raw) {
+      if (raw == null || raw === '') return '-';
+      const t = Date.parse(String(raw));
+      if (!Number.isFinite(t)) return String(raw);
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${y}年${mo}月${da}日${h}：${mi}`;
+    }
+
     async function loadMonitors() {
       const res = await fetch('/api/v1/public/monitoring/monitors');
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3039,7 +3169,7 @@ def price_trend_page() -> HTMLResponse:
         li.innerHTML = `
           <div class="monitor-title">${escapeHtml(m.keyword || '未命名商品')}</div>
           <div class="monitor-meta">monitor: ${escapeHtml((m.monitor_id || '').slice(0,8))} | 观测数：${m.observation_count || 0}</div>
-          <div class="monitor-meta">最近采样：${escapeHtml(m.last_captured_at || '-')}</div>
+          <div class="monitor-meta">最近采样：${escapeHtml(formatCnLocalDateTime(m.last_captured_at))}</div>
         `;
         li.onclick = async () => {
           activeMonitorId = m.monitor_id;
@@ -3251,7 +3381,7 @@ def price_trend_page() -> HTMLResponse:
         tr.innerHTML = `
           <td>${r.index ?? '-'}</td>
           <td>${escapeHtml(r.item_name || '-')}</td>
-          <td>${escapeHtml(r.captured_at || '-')}</td>
+          <td title="${escapeHtml(r.captured_at || '')}">${escapeHtml(formatCnLocalDateTime(r.captured_at))}</td>
           <td>${typeof r.price === 'number' ? r.price.toFixed(2) : '-'}</td>
           <td class="${deltaCls}">${deltaText}</td>
         `;
@@ -3297,8 +3427,7 @@ def price_trend_page() -> HTMLResponse:
         if (typeof r.price !== 'number' || !r.captured_at) continue;
         const ts = Date.parse(r.captured_at) || 0;
         if (!ts) continue;
-        const d = new Date(ts);
-        const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        const label = formatCnLocalDateTime(r.captured_at);
         points.push({ ts, value: r.price, label, rawTime: r.captured_at });
       }
       points.sort((a, b) => a.ts - b.ts);
@@ -3379,7 +3508,7 @@ def price_trend_page() -> HTMLResponse:
           return;
         }
         drawLine(lastChartPoints, lastChartTitle, lastChartUnit, nearest);
-        tooltip.innerHTML = `时间：${escapeHtml(nearest.p.rawTime || nearest.p.label || '-')}<br/>价格：${Number(nearest.p.value).toFixed(2)} ${escapeHtml(lastChartUnit || 'CNY')}`;
+        tooltip.innerHTML = `时间：${escapeHtml(formatCnLocalDateTime(nearest.p.rawTime || nearest.p.label))}<br/>价格：${Number(nearest.p.value).toFixed(2)} ${escapeHtml(lastChartUnit || 'CNY')}`;
         tooltip.style.display = 'block';
         tooltip.style.left = `${nearest.x + 16}px`;
         tooltip.style.top = `${Math.max(8, nearest.y - 10)}px`;
@@ -3549,6 +3678,18 @@ def keyword_tracking_page() -> HTMLResponse:
     </table>
   </div>
   <script>
+    function formatCnLocalDateTime(raw) {
+      if (raw == null || raw === '') return '-';
+      const t = Date.parse(String(raw));
+      if (!Number.isFinite(t)) return String(raw);
+      const d = new Date(t);
+      const y = d.getFullYear();
+      const mo = String(d.getMonth() + 1).padStart(2, '0');
+      const da = String(d.getDate()).padStart(2, '0');
+      const h = String(d.getHours()).padStart(2, '0');
+      const mi = String(d.getMinutes()).padStart(2, '0');
+      return `${y}年${mo}月${da}日${h}：${mi}`;
+    }
     async function loadMonitors() {
       const body = document.getElementById('tbody');
       try {
@@ -3569,7 +3710,7 @@ def keyword_tracking_page() -> HTMLResponse:
             <td>${m.cadence || '-'}</td>
             <td>${m.url_count || 0}</td>
             <td>${m.observation_count || 0}</td>
-            <td>${m.last_captured_at || '-'}</td>
+            <td>${formatCnLocalDateTime(m.last_captured_at)}</td>
             <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待采样'}</td>
           `;
           body.appendChild(tr);
@@ -3577,9 +3718,6 @@ def keyword_tracking_page() -> HTMLResponse:
       } catch (e) {
         body.innerHTML = `<tr><td colspan="7" class="muted">加载失败：${e?.message || '未知错误'}</td></tr>`;
       }
-    }
-    function _fmtTs(v) {
-      return v || '-';
     }
     async function loadNewsMonitoring() {
       const body = document.getElementById('news-tbody');
@@ -3616,8 +3754,8 @@ def keyword_tracking_page() -> HTMLResponse:
           tr.innerHTML = `
             <td>${n.keyword}</td>
             <td>${n.count || 0}</td>
-            <td>${_fmtTs(n.latestPublished)}</td>
-            <td>${_fmtTs(n.latestCreated)}</td>
+            <td>${formatCnLocalDateTime(n.latestPublished)}</td>
+            <td>${formatCnLocalDateTime(n.latestCreated)}</td>
             <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待入库'}</td>
           `;
           body.appendChild(tr);
@@ -3654,7 +3792,7 @@ def keyword_tracking_page() -> HTMLResponse:
           if (generatedAt && (!g.latestGeneratedAt || generatedAt > g.latestGeneratedAt)) g.latestGeneratedAt = generatedAt;
           if (generatedAt && (!latest || generatedAt > latest)) latest = generatedAt;
         }
-        lastEl.textContent = latest || '-';
+        lastEl.textContent = latest ? formatCnLocalDateTime(latest) : '-';
         kwEl.textContent = String(grouped.size);
         const rows = Array.from(grouped.values()).sort((a, b) => {
           const ta = a.latestGeneratedAt || '';
@@ -3668,7 +3806,7 @@ def keyword_tracking_page() -> HTMLResponse:
           tr.innerHTML = `
             <td>${r.keyword}</td>
             <td>${r.count || 0}</td>
-            <td>${r.latestGeneratedAt || '-'}</td>
+            <td>${formatCnLocalDateTime(r.latestGeneratedAt)}</td>
             <td class="${healthy ? 'ok' : 'warn'}">${healthy ? '正常' : '待生成'}</td>
           `;
           body.appendChild(tr);

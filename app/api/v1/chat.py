@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.core.config import settings
-from app.services.openclaw_chat_bridge import stream_openclaw_reply
+from app.services.openclaw_chat_bridge import probe_openclaw_gateway, stream_openclaw_reply
 
 router = APIRouter(
     prefix="/chat",
@@ -83,6 +83,15 @@ async def chat_ws(websocket: WebSocket) -> None:
                 )
 
             try:
+                probe = await probe_openclaw_gateway(
+                    openclaw_ws_url=settings.openclaw_ws_url,
+                    timeout_seconds=settings.openclaw_gateway_probe_timeout_seconds,
+                )
+                if not probe.get("ok"):
+                    raise RuntimeError(
+                        "OpenClaw Gateway 当前不可用，请稍后重试。"
+                        + (f" detail={probe.get('detail')}" if probe.get("detail") else "")
+                    )
                 await stream_openclaw_reply(
                     openclaw_ws_url=settings.openclaw_ws_url,
                     user_text=user_text,

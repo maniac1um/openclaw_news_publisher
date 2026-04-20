@@ -59,3 +59,9 @@ else
   echo "WARN: Health check failed. Inspect logs: tail -50 $LOG" >&2
   exit 1
 fi
+
+if [[ "${OPENCLAW_WORKFLOW_POST_CHECK:-1}" == "1" ]]; then
+  # shellcheck source=/dev/null
+  source "$ROOT/scripts/local/workflow-post-check.sh"
+  workflow_post_check "$PORT" || true
+fi

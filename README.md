@@ -33,10 +33,11 @@
   - 会话在浏览器本地持久化（`localStorage`）：刷新/切页可恢复，支持“删除当前会话”和“清空缓存”
   - 当前为单设备本地持久化；多设备同步建议见 `docs/architecture/news-pipeline.md`（对话持久化演进）
 - 用户页面与公开查询 API
-  - `/`（门户首页：OpenClaw 对话 + 工作情况 + 网页化工作流控制台）
-  - `/topic-analysis`（专题分析：开发中）
-  - `/price-trend`（价格趋势：开发中）
-  - `/keyword-tracking`（关键词追踪：开发中）
+  - `/`（门户首页：OpenClaw 对话 + 最新工作流状态）
+  - `/workflow`（工作流管理页：完整工作流操作与诊断）
+  - `/topic-analysis`（专题分析）
+  - `/price-trend`（价格趋势）
+  - `/keyword-tracking`（关键词追踪）
   - `GET /api/v1/public/reports`
   - `GET /api/v1/public/reports/{ingest_id}`
   - `POST /api/v1/public/reports/bulk-delete`（批量删除）
@@ -44,6 +45,9 @@
   - `GET /api/v1/public/monitoring/external-jobs`（外部任务最近心跳）
   - 网页工作流控制台 API
     - `GET /api/v1/public/workflow/state`
+    - `GET /api/v1/public/workflow/gateway-status`
+    - `GET /api/v1/public/workflow/diagnostics`
+    - `GET /api/v1/public/workflow/run-readiness?monitor_id=<uuid>`
     - `POST /api/v1/public/workflow/monitor/bootstrap`
     - `POST /api/v1/public/workflow/analysis/run`
     - `GET /api/v1/public/workflow/external-configs`
@@ -92,6 +96,7 @@ openclaw_news_publisher/
 │  │  ├─ start-server.sh
 │  │  ├─ stop-server.sh
 │  │  ├─ restart-server.sh
+│  │  ├─ workflow-post-check.sh（启动后 Gateway / 诊断摘要）
 │  │  └─ verify-openclaw-databases.sh
 │  └─ publish_site.py
 ├─ tests/
@@ -208,8 +213,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\deploy\one-click-windows.ps1
 
 - 自动创建 `.venv`（若不存在）
 - 自动执行 `pip install -e .`
-- 若 `.env` 不存在，则从 `.env.example` 复制
+- 若 `.env` 不存在，则从 `.env.example` 复制；若无 `.env.example` 则生成最小 `.env`（含 `OPENCLAW_OPENCLAW_WS_URL`、`OPENCLAW_OPENCLAW_GATEWAY_PROBE_TIMEOUT_SECONDS` 与三库连接串占位注释）
 - 自动启动 `uvicorn app.main:app`
+- 启动成功后自动请求 `workflow/gateway-status` 与 `workflow/diagnostics`，在终端输出简短中文就绪提示（本地 `scripts/local/start-server.sh` 默认同样执行，可通过 `OPENCLAW_WORKFLOW_POST_CHECK=0` 关闭）
 
 > 若你还未配置 PostgreSQL，可先用最小 `.env` 启动服务；数据库相关功能会按接口返回提示（例如 503 或 enabled=false）。
 
@@ -348,6 +354,8 @@ bash scripts/local/verify-openclaw-databases.sh
 - `OPENCLAW_OPENCLAW_ENABLE_SIGNATURE`（默认 `false`）
 - `OPENCLAW_OPENCLAW_HMAC_SECRET`（默认 `dev-secret`）
 - `OPENCLAW_OPENCLAW_WS_URL`（默认 `ws://localhost:18789/ws`）
+- `OPENCLAW_OPENCLAW_GATEWAY_PROBE_TIMEOUT_SECONDS`（默认 `2.0`，Gateway 连通性探测超时秒数）
+- `OPENCLAW_WORKFLOW_POST_CHECK`（默认 `1`；`scripts/local/start-server.sh` 在健康检查通过后是否自动调用工作流就绪 API 并打印摘要；设为 `0` 可关闭）
 - `OPENCLAW_DATABASE_URL`（可选；配置后启用 PostgreSQL 存储）
 - `OPENCLAW_MONITORING_DATABASE_URL`（可选；配置后启用 PostgreSQL 价格监测存储）
 - `OPENCLAW_MONITORING_ALLOW_SERVER_SCRAPE`（默认 `false`：**不在服务端**对监测 URL 做 HTTP 抓取；由 OpenClaw 采集后 `POST .../observations/ingest`。设为 `true` 可恢复旧版 `bootstrap` 批量候选 URL + `run-once` 服务端抓取）
@@ -629,19 +637,26 @@ curl -fsS -X POST "$BASE_URL/api/v1/openclaw/monitoring/external-heartbeat" \
 
 这使得服务重启后仍可在门户端查看运行历史与配置状态。
 
-## 网页化工作流控制台（门户首页）
+## 网页化工作流控制台（`/workflow`）
 
-门户首页新增“网页化工作流控制台”，用于把原本依赖脚本/API 的关键操作搬到页面内：
+首页仅保留“最新工作流状态”，完整工作流操作已集中到 `GET /workflow` 页面，用于把原本依赖脚本/API 的关键操作搬到页面内：
 
 - 首次向导（关键词 -> monitor -> 外部调度配置 -> 可选立即触发联合分析）
+- 一键修复向导（根据诊断结果补齐 monitor / 调度配置）
 - 一键创建监测任务（bootstrap）
 - 一键保存/启停外部调度配置
 - 一键触发新闻+价格联合分析并可选发布
+- 一键诊断（Gateway、三库连通、调度配置、最近运行）
+- 一键可运行性验证（monitor 观测、调度绑定、心跳新鲜度、联合分析 dry-run）
 - 查看最近外部调度运行历史（支持失败排障）
+- 非技术化表单增强：频率改为“X天X小时X分钟”选择器、timezone 下拉、monitor_id 下拉选择
 
 ### 控制台 API 清单
 
 - `GET /api/v1/public/workflow/state`
+- `GET /api/v1/public/workflow/gateway-status`
+- `GET /api/v1/public/workflow/diagnostics`
+- `GET /api/v1/public/workflow/run-readiness?monitor_id=<uuid>`
 - `GET /api/v1/public/workflow/external-runs?limit=120`
 - `GET /api/v1/public/workflow/external-configs`
 - `POST /api/v1/public/workflow/external-configs`
@@ -658,6 +673,7 @@ curl -sS "http://127.0.0.1:8000/api/v1/public/workflow/state"
 返回字段（节选）：
 
 - `overview`：沿用门户工作情况聚合（报告/价格/新闻/external_cron）
+- `gateway`：OpenClaw Gateway 连通性（ok/ready/latency/detail）
 - `internal_scheduler`：内部 scheduler 状态
 - `external_scheduler_configs`：外部调度配置列表
 - `external_scheduler_runs`：最近运行事件（含 status/message/last_seen_at）

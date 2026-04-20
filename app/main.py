@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import json
 from datetime import datetime, timedelta, timezone
@@ -12,6 +13,7 @@ from app.api.v1.chat import router as chat_router
 from app.core.config import settings
 from app.core.security import verify_api_key
 from app.schemas.report import OpenClawReportIn
+from app.services.openclaw_chat_bridge import probe_openclaw_gateway
 from app.services.monitoring_scheduler import MonitoringScheduler
 from app.services.monitoring_service import MonitoringService
 logging.basicConfig(
@@ -197,8 +199,8 @@ def index(page: str | None = None) -> HTMLResponse:
   </style>
 </head>
 <body>
-  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw市场趋势自动化分析平台</div><div class="top-actions"><button onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
-  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
+  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw市场趋势自动化分析平台</div><div class="top-actions"><button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
+  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li><a href="/workflow">工作流管理</a></li><li class="active"><a href="/?page=news">新闻动态</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
   <div class="wrap">
     <div class="page">
       <div class="left">
@@ -233,8 +235,9 @@ def index(page: str | None = None) -> HTMLResponse:
     let selectedIds = new Set();
     let newsPage = 1;
     const NEWS_PAGE_SIZE = 10;
-    function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); }
-    function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); }
+    function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); syncDarkModeButtonLabel(); }
+    function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); syncDarkModeButtonLabel(); }
+    function syncDarkModeButtonLabel() { const btn = document.getElementById('dark-mode-btn'); if (!btn) return; btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）'; }
     function escapeHtml(text) { return String(text ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('\"','&quot;').replaceAll(\"'\",'&#039;'); }
     function formatCnLocalDateTime(raw) {
       if (raw == null || raw === '') return '-';
@@ -732,6 +735,7 @@ def index(page: str | None = None) -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li class="active"><a href="/">门户首页</a></li>
+        <li><a href="/workflow">工作流管理</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
         <li><a href="/topic-analysis">专题分析</a></li>
@@ -763,32 +767,16 @@ def index(page: str | None = None) -> HTMLResponse:
       </div>
 
       <div class="card workflow-card">
-        <div class="card-title">网页化工作流控制台</div>
-        <div class="muted">在网页内完成监测创建、调度配置、联合分析触发与运行排障。</div>
+        <div class="card-title">最新工作流状态</div>
+        <div class="muted">首页仅保留最新状态展示，完整工作流操作请进入“工作流管理”页面。</div>
         <div class="workflow-grid">
-          <div class="workflow-box"><div class="k">监测任务</div><div class="v" id="wf-monitor-count">-</div></div>
-          <div class="workflow-box"><div class="k">价格观测</div><div class="v" id="wf-observation-count">-</div></div>
-          <div class="workflow-box"><div class="k">已配置定时任务</div><div class="v" id="wf-config-count">-</div></div>
           <div class="workflow-box"><div class="k">最近一次运行</div><div class="v" id="wf-last-run">-</div></div>
         </div>
-        <div class="workflow-actions">
-          <button id="wf-open-wizard-btn" type="button">新手一键配置</button>
-          <button id="wf-refresh-btn" type="button">更新工作流状态</button>
-          <button id="wf-open-bootstrap-btn" type="button">新建价格监测任务</button>
-          <button id="wf-open-config-btn" type="button">配置外部定时任务</button>
-          <button id="wf-open-analysis-btn" type="button">立即生成联合分析</button>
-        </div>
-        <div id="wf-result" class="workflow-result">等待操作...</div>
         <div class="workflow-log" id="wf-run-log" title="仅显示最新一条工作流运行记录"></div>
-      </div>
-
-      <div class="card status-card">
-        <div class="card-title">OpenClaw 工作情况</div>
-        <div class="muted" id="status-summary">加载中...</div>
-        <div class="muted" id="work-overview-hint" style="font-size:13px;margin-top:6px;line-height:1.5;">
-          价格与新闻进度建议每 30 分钟对照一次；本卡片每 30 分钟自动刷新（仍可在下方手动刷新页面）。
+        <div id="wf-result" class="workflow-result">正在加载工作流状态…</div>
+        <div class="workflow-actions">
+          <button type="button" onclick="location.href='/workflow'">进入工作流管理页面</button>
         </div>
-        <ul id="status-list"></ul>
       </div>
     </div>
   </div>
@@ -796,17 +784,6 @@ def index(page: str | None = None) -> HTMLResponse:
   <div class="portal-footer">
     <div>作者：maniac1um</div>
     <div style="margin-top:6px;"><a href="mailto:maniac1um@163.com">联系作者</a></div>
-  </div>
-
-  <div id="wf-modal" class="modal-overlay" role="dialog" aria-modal="true">
-    <div class="modal">
-      <h3 class="modal-title" id="wf-modal-title">工作流向导</h3>
-      <div class="modal-body" id="wf-modal-body"></div>
-      <div class="modal-actions">
-        <button class="btn" id="wf-modal-cancel-btn" type="button">关闭</button>
-        <button class="btn primary" id="wf-modal-submit-btn" type="button">提交</button>
-      </div>
-    </div>
   </div>
 
   <script>
@@ -839,245 +816,13 @@ def index(page: str | None = None) -> HTMLResponse:
       const mi = String(d.getMinutes()).padStart(2, '0');
       return `${y}年${mo}月${da}日${h}：${mi}`;
     }
-    function appendSectionHeading(list, title, metaText) {
-      const li = document.createElement('li');
-      li.className = 'status-item';
-      const body = document.createElement('div');
-      body.className = 'status-item-body';
-      const t = document.createElement('div');
-      t.className = 'status-item-title';
-      t.style.fontWeight = '800';
-      t.style.color = 'var(--brand)';
-      t.textContent = title;
-      const m = document.createElement('div');
-      m.className = 'status-item-meta';
-      m.textContent = metaText;
-      body.appendChild(t);
-      body.appendChild(m);
-      li.appendChild(body);
-      list.appendChild(li);
-    }
-    function appendStatusMetaItem(list, title, lines) {
-      const li = document.createElement('li');
-      li.className = 'status-item';
-      const body = document.createElement('div');
-      body.className = 'status-item-body';
-      const t = document.createElement('div');
-      t.className = 'status-item-title';
-      t.textContent = title;
-      body.appendChild(t);
-      for (const line of (lines || [])) {
-        const m = document.createElement('div');
-        m.className = 'status-item-meta';
-        m.textContent = line;
-        body.appendChild(m);
-      }
-      li.appendChild(body);
-      list.appendChild(li);
-    }
-
-    async function loadOpenClawWorkOverview() {
-      const summary = document.getElementById('status-summary');
-      const list = document.getElementById('status-list');
-      summary.textContent = '加载中...';
-      list.innerHTML = '';
-      try {
-        const res = await fetch('/api/v1/public/portal/openclaw-work-overview');
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const o = await res.json();
-        const rc = o.reports?.published_count ?? 0;
-        const pc = o.price_monitoring?.observation_count ?? 0;
-        const nc = o.news_library?.item_count ?? 0;
-        const jc = o.external_cron?.job_count ?? 0;
-        summary.textContent = `报告 ${rc} 条 · 价格观测 ${pc} 条 · 新闻库 ${nc} 条 · 外部定时 ${jc} 个`;
-
-        const rep = o.reports || {};
-        if (rep.error) {
-          appendSectionHeading(list, '报告发布', '读取失败：' + rep.error);
-        } else if (!rep.available) {
-          appendSectionHeading(list, '报告发布', '未配置主库 OPENCLAW_DATABASE_URL。');
-        } else {
-          appendSectionHeading(
-            list,
-            '报告发布',
-            '已发布 ' + rep.published_count + ' 条 · 最近更新：' + (rep.last_generated_at ? formatCnLocalDateTime(rep.last_generated_at) : '—'),
-          );
-          const top = rep.recent || [];
-          if (!top.length) {
-            const li = document.createElement('li');
-            li.className = 'status-item';
-            const body = document.createElement('div');
-            body.className = 'status-item-body';
-            const m = document.createElement('div');
-            m.className = 'status-item-meta';
-            m.textContent = '暂无报告，等待 OpenClaw 入站。';
-            body.appendChild(m);
-            li.appendChild(body);
-            list.appendChild(li);
-          } else {
-            for (const r of top) {
-              const li = document.createElement('li');
-              li.className = 'status-item';
-              const title = r.title || '未命名报告';
-              const meta = r.generated_at ? formatCnLocalDateTime(r.generated_at) : '-';
-              const id = r.ingest_id;
-              if (id) {
-                const a = document.createElement('a');
-                a.className = 'status-item-link';
-                a.href = '/?page=news&report=' + encodeURIComponent(id);
-                a.setAttribute('title', '在新闻动态中打开此报告');
-                const t = document.createElement('div');
-                t.className = 'status-item-title';
-                t.textContent = title;
-                const m = document.createElement('div');
-                m.className = 'status-item-meta';
-                m.textContent = '生成时间：' + meta;
-                a.appendChild(t);
-                a.appendChild(m);
-                li.appendChild(a);
-              } else {
-                const body = document.createElement('div');
-                body.className = 'status-item-body';
-                const t0 = document.createElement('div');
-                t0.className = 'status-item-title';
-                t0.textContent = title;
-                const m0 = document.createElement('div');
-                m0.className = 'status-item-meta';
-                m0.textContent = '生成时间：' + meta;
-                body.appendChild(t0);
-                body.appendChild(m0);
-                li.appendChild(body);
-              }
-              list.appendChild(li);
-            }
-          }
-        }
-
-        const pr = o.price_monitoring || {};
-        if (pr.error) {
-          appendSectionHeading(list, '价格趋势监测', '读取失败：' + pr.error);
-        } else if (!pr.available) {
-          appendSectionHeading(list, '价格趋势监测', '未配置监测库 OPENCLAW_MONITORING_DATABASE_URL。');
-        } else {
-          appendSectionHeading(
-            list,
-            '价格趋势监测',
-            '监测任务 ' +
-              pr.monitor_count +
-              ' 个 · 累计观测 ' +
-              pr.observation_count +
-              ' 条 · 最近采样：' +
-              (pr.last_captured_at ? formatCnLocalDateTime(pr.last_captured_at) : '—'),
-          );
-          const recentMonitors = Array.isArray(pr.recent) ? pr.recent : [];
-          for (const m of recentMonitors.slice(0, 6)) {
-            appendStatusMetaItem(
-              list,
-              (m.keyword || '未命名关键词') + '（' + (m.monitor_id || '-').slice(0, 8) + '）',
-              [
-                '观测数：' + (m.observation_count ?? 0),
-                '最近采样：' + (m.last_captured_at ? formatCnLocalDateTime(m.last_captured_at) : '—'),
-              ],
-            );
-          }
-        }
-
-        const nw = o.news_library || {};
-        if (nw.error) {
-          appendSectionHeading(list, '新闻动态监测（新闻库）', '读取失败：' + nw.error);
-        } else if (!nw.available) {
-          appendSectionHeading(list, '新闻动态监测（新闻库）', '未配置新闻库 OPENCLAW_NEWS_DATABASE_URL。');
-        } else {
-          appendSectionHeading(
-            list,
-            '新闻动态监测（新闻库）',
-            '库内 ' + nw.item_count + ' 条 · 最近入库：' + (nw.last_created_at ? formatCnLocalDateTime(nw.last_created_at) : '—'),
-          );
-          const keywordRows = Array.isArray(nw.recent_keywords) ? nw.recent_keywords : [];
-          for (const row of keywordRows.slice(0, 6)) {
-            appendStatusMetaItem(
-              list,
-              row.keyword || '未命名关键词',
-              [
-                '条目数：' + (row.item_count ?? 0),
-                '最近事件时间：' +
-                  (row.last_event_at || row.last_created_at
-                    ? formatCnLocalDateTime(row.last_event_at || row.last_created_at)
-                    : '—'),
-              ],
-            );
-          }
-        }
-
-        const ext = o.external_cron || {};
-        const jobs = Array.isArray(ext.jobs) ? ext.jobs : [];
-        appendSectionHeading(
-          list,
-          '外部定时任务（cron / OpenClaw cron）',
-          '已上报 ' + jobs.length + ' 个 · 通过 external-heartbeat 写入',
-        );
-        if (!jobs.length) {
-          const empty = document.createElement('li');
-          empty.className = 'status-item';
-          const body = document.createElement('div');
-          body.className = 'status-item-body';
-          const m = document.createElement('div');
-          m.className = 'status-item-meta';
-          m.textContent = '暂无心跳记录。可 POST /api/v1/openclaw/monitoring/external-heartbeat 上报。';
-          body.appendChild(m);
-          empty.appendChild(body);
-          list.appendChild(empty);
-        } else {
-          for (const job of jobs.slice(0, 12)) {
-            appendStatusMetaItem(
-              list,
-              (job.job_name || '-') + '（' + (job.status || 'unknown') + '）',
-              [
-                'monitor_id: ' + (job.monitor_id || '-'),
-                'last_seen_at: ' + formatCnLocalDateTime(job.last_seen_at || ''),
-                'message: ' + (job.message || '-'),
-              ],
-            );
-          }
-        }
-      } catch (err) {
-        summary.textContent = '加载失败';
-        const li = document.createElement('li');
-        li.className = 'status-item';
-        li.innerHTML =
-          '<div class="status-item-body"><div class="status-item-title">无法获取工作情况</div><div class="status-item-meta">' +
-          (err?.message || '未知错误') +
-          '</div></div>';
-        list.appendChild(li);
-      }
-    }
-
     const wfResult = document.getElementById('wf-result');
     const wfRunLog = document.getElementById('wf-run-log');
-    const wfMonitorCount = document.getElementById('wf-monitor-count');
-    const wfObservationCount = document.getElementById('wf-observation-count');
-    const wfConfigCount = document.getElementById('wf-config-count');
     const wfLastRun = document.getElementById('wf-last-run');
-    const wfModal = document.getElementById('wf-modal');
-    const wfModalTitle = document.getElementById('wf-modal-title');
-    const wfModalBody = document.getElementById('wf-modal-body');
-    const wfModalCancelBtn = document.getElementById('wf-modal-cancel-btn');
-    const wfModalSubmitBtn = document.getElementById('wf-modal-submit-btn');
-    let wfModalSubmitHandler = null;
     let workflowStateCache = null;
-    let workflowMonitorsCache = [];
 
     function setWorkflowResult(text) {
       if (wfResult) wfResult.textContent = text;
-    }
-
-    function htmlEsc(text) {
-      return String(text ?? '')
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
     }
 
     async function fetchJson(url, options = {}) {
@@ -1091,20 +836,8 @@ def index(page: str | None = None) -> HTMLResponse:
       return payload;
     }
 
-    function openWorkflowModal(title, html, onSubmit) {
-      wfModalTitle.textContent = title;
-      wfModalBody.innerHTML = html;
-      wfModal.style.display = 'flex';
-      wfModalSubmitHandler = onSubmit;
-    }
-
-    function closeWorkflowModal() {
-      wfModal.style.display = 'none';
-      wfModalSubmitHandler = null;
-      wfModalBody.innerHTML = '';
-    }
-
     function renderWorkflowRunLog(runs) {
+      if (!wfRunLog) return;
       wfRunLog.innerHTML = '';
       const rows = Array.isArray(runs) ? runs : [];
       if (!rows.length) {
@@ -1123,14 +856,8 @@ def index(page: str | None = None) -> HTMLResponse:
 
     function renderWorkflowState(state) {
       workflowStateCache = state || null;
-      const ov = state?.overview || {};
-      const price = ov.price_monitoring || {};
       const runs = Array.isArray(state?.external_scheduler_runs) ? state.external_scheduler_runs : [];
-      const cfgs = Array.isArray(state?.external_scheduler_configs) ? state.external_scheduler_configs : [];
-      wfMonitorCount.textContent = String(price.monitor_count ?? 0);
-      wfObservationCount.textContent = String(price.observation_count ?? 0);
-      wfConfigCount.textContent = String(cfgs.length);
-      wfLastRun.textContent = runs.length ? formatCnLocalDateTime(runs[0].last_seen_at) : '-';
+      if (wfLastRun) wfLastRun.textContent = runs.length ? formatCnLocalDateTime(runs[0].last_seen_at) : '-';
       renderWorkflowRunLog(runs);
     }
 
@@ -1138,300 +865,18 @@ def index(page: str | None = None) -> HTMLResponse:
       try {
         const state = await fetchJson('/api/v1/public/workflow/state');
         renderWorkflowState(state);
-        setWorkflowResult('工作流状态已刷新。');
+        const gw = state?.gateway;
+        const gwLine = gw && typeof gw.ok === 'boolean' ? (gw.ok ? 'OpenClaw Gateway：在线' : 'OpenClaw Gateway：离线') : '';
+        setWorkflowResult(
+          '工作流状态已刷新。' + (gwLine ? ('\\n' + gwLine) : '') + '\\n完整操作请打开「工作流管理」页面：/workflow',
+        );
       } catch (e) {
-        setWorkflowResult(`工作流状态加载失败：${e?.message || '未知错误'}`);
+        setWorkflowResult(
+          '工作流状态加载失败：' + (e?.message || '未知错误') + '\\n若你刚更新代码，请重启 uvicorn 后再访问 /workflow（旧进程会返回 404）。',
+        );
       }
     }
 
-    async function loadWorkflowMonitors() {
-      const arr = await fetchJson('/api/v1/public/monitoring/monitors');
-      workflowMonitorsCache = Array.isArray(arr) ? arr : [];
-      return workflowMonitorsCache;
-    }
-
-    function openWizardModal() {
-      openWorkflowModal(
-        '首次配置向导',
-        `<div class="muted" style="font-size:13px;line-height:1.6;">
-          用途：一次性完成最小闭环配置（关键词 → 创建监测任务 → 保存调度配置）。
-          若勾选“生成分析后自动发布报告”，会额外触发一次联合分析并提交报告。
-        </div>
-        <div class="workflow-form">
-          <label><strong>关键词（必填）</strong>：你要监测和分析的对象。</label>
-          <input id="wf-wz-keyword" placeholder="例：黄金 / 现货黄金 / 原油" />
-          <div class="muted" style="font-size:12px;">会用于创建 monitor，并作为后续分析默认关键词。</div>
-
-          <label><strong>采样节奏 cadence（必填）</strong>：用于监测任务元信息。</label>
-          <select id="wf-wz-cadence"><option value="hourly">hourly（小时级）</option><option value="daily" selected>daily（天级）</option></select>
-          <div class="muted" style="font-size:12px;">建议与实际 cron 频率保持一致，便于排障。</div>
-
-          <label><strong>外部调度任务名 job_name（建议填写）</strong>：用于日志与运行历史识别。</label>
-          <input id="wf-wz-job-name" placeholder="例：openclaw-gold-ingest-30min" />
-          <div class="muted" style="font-size:12px;">不填会自动生成，但建议自定义，便于长期运维。</div>
-
-          <label><strong>cron 表达式（必填）</strong>：外部调度计划（5段）。</label>
-          <input id="wf-wz-cron" placeholder="例：*/30 * * * *（每30分钟）" value="*/30 * * * *" />
-          <div class="muted" style="font-size:12px;">常用：*/30 * * * *（每30分钟）；0 * * * *（每小时整点）。</div>
-
-          <label><strong>时区 timezone（必填）</strong>：解释 cron 时间的时区。</label>
-          <input id="wf-wz-timezone" placeholder="例：Asia/Shanghai" value="Asia/Shanghai" />
-          <div class="muted" style="font-size:12px;">中国大陆建议填写 Asia/Shanghai。</div>
-
-          <div class="workflow-toggle"><input id="wf-wz-publish" type="checkbox" checked />生成分析后自动发布报告</div>
-          <div class="muted" style="font-size:12px;">勾选：向导结束后会立即触发一次联合分析并提交报告。</div>
-        </div>`,
-        async () => {
-          const keyword = (document.getElementById('wf-wz-keyword')?.value || '').trim();
-          if (!keyword) throw new Error('请先填写关键词。');
-          const cadence = document.getElementById('wf-wz-cadence')?.value || 'daily';
-          const jobName = (document.getElementById('wf-wz-job-name')?.value || '').trim() || `openclaw-${keyword}-job`;
-          const cronExpr = (document.getElementById('wf-wz-cron')?.value || '').trim();
-          const timezone = (document.getElementById('wf-wz-timezone')?.value || 'Asia/Shanghai').trim();
-          const publish = Boolean(document.getElementById('wf-wz-publish')?.checked);
-          const boot = await fetchJson('/api/v1/public/workflow/monitor/bootstrap', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ keyword, cadence, source_profile: 'auto', platforms: ['news'], candidate_count: 10 }),
-          });
-          const monitorId = boot.monitor_id;
-          await fetchJson('/api/v1/public/workflow/external-configs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              job_name: jobName,
-              monitor_id: monitorId,
-              cron_expr: cronExpr || '*/30 * * * *',
-              timezone,
-              enabled: true,
-              retry_policy: 'no-retry',
-              notes: '由网页首次向导创建',
-            }),
-          });
-          if (publish) {
-            await fetchJson('/api/v1/public/workflow/analysis/run', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ monitor_id: monitorId, keyword, window_days: 7, news_hours: 72, horizon: '24h', publish: true }),
-            });
-          }
-          setWorkflowResult(`首次向导完成：monitor_id=${monitorId}`);
-          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
-        },
-      );
-    }
-
-    function openBootstrapModal() {
-      openWorkflowModal(
-        '创建监测任务',
-        `<div class="muted" style="font-size:13px;line-height:1.6;">
-          用途：仅创建 monitor（生成 monitor_id），不自动创建定时任务，也不会自动生成报告。
-          适合先建任务，再由 OpenClaw/外部定时任务持续采集。
-        </div>
-        <div class="workflow-form">
-          <label><strong>关键词（必填）</strong>：monitor 的核心标识。</label>
-          <input id="wf-bs-keyword" placeholder="例：现货黄金 / 白银 / 原油" />
-          <div class="muted" style="font-size:12px;">后续在监测列表、联合分析中会按该关键词聚合。</div>
-
-          <label><strong>采样节奏 cadence（必填）</strong></label>
-          <select id="wf-bs-cadence"><option value="hourly">hourly（小时级）</option><option value="daily" selected>daily（天级）</option></select>
-          <div class="muted" style="font-size:12px;">仅记录为任务元信息，不会自动执行定时。</div>
-
-          <label><strong>source_profile（可选）</strong>：来源画像。</label>
-          <select id="wf-bs-profile"><option value="auto" selected>auto（自动）</option><option value="commodity">commodity（大宗商品）</option><option value="ecommerce">ecommerce（电商）</option></select>
-          <div class="muted" style="font-size:12px;">默认部署下主要作为元信息；若开启服务端抓取时会影响候选 URL 策略。</div>
-        </div>`,
-        async () => {
-          const keyword = (document.getElementById('wf-bs-keyword')?.value || '').trim();
-          if (!keyword) throw new Error('请填写关键词。');
-          const cadence = document.getElementById('wf-bs-cadence')?.value || 'daily';
-          const sourceProfile = document.getElementById('wf-bs-profile')?.value || 'auto';
-          const data = await fetchJson('/api/v1/public/workflow/monitor/bootstrap', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ keyword, cadence, source_profile: sourceProfile, platforms: ['news'], candidate_count: 10 }),
-          });
-          setWorkflowResult(`创建成功：monitor_id=${data.monitor_id || '-'}`);
-          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
-        },
-      );
-    }
-
-    function openConfigModal() {
-      const defaultMonitorId =
-        workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id ||
-        workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id ||
-        '';
-      openWorkflowModal(
-        '外部调度配置',
-        `<div class="muted" style="font-size:13px;line-height:1.6;">
-          用途：保存“外部调度配置元信息”（job_name / monitor_id / cron / 时区等）。
-          说明：本页面不直接执行系统 cron，实际执行仍由 OpenClaw 或外部调度器完成。
-        </div>
-        <div class="workflow-form">
-          <label><strong>job_name（必填）</strong>：外部调度任务唯一名。</label>
-          <input id="wf-cf-job-name" placeholder="例：openclaw-gold-ingest-30min" />
-          <div class="muted" style="font-size:12px;">建议稳定不变；运行历史会按该名称聚合。</div>
-
-          <label><strong>monitor_id（必填）</strong>：调度任务对应的监测任务 ID。</label>
-          <input id="wf-cf-monitor-id" placeholder="UUID monitor_id" value="${defaultMonitorId}" />
-          <div class="muted" style="font-size:12px;">可从“价格趋势”或本卡片状态中复制。</div>
-
-          <label><strong>cron 表达式（必填）</strong>：5段计划。</label>
-          <input id="wf-cf-cron" placeholder="例：*/30 * * * *" value="*/30 * * * *" />
-          <div class="muted" style="font-size:12px;">示例：0 * * * *（每小时）；0 9 * * *（每天9点）。</div>
-
-          <label><strong>timezone（必填）</strong>：时区。</label>
-          <input id="wf-cf-timezone" placeholder="例：Asia/Shanghai" value="Asia/Shanghai" />
-
-          <label><strong>retry_policy（可选）</strong>：失败策略。</label>
-          <select id="wf-cf-retry"><option value="no-retry" selected>no-retry（失败不重试）</option><option value="retry-3-exp">retry-3-exp（指数退避重试3次）</option></select>
-          <div class="muted" style="font-size:12px;">仅记录策略意图，实际由外部调度器/OpenClaw 任务实现。</div>
-
-          <label><strong>notes（可选）</strong>：运维备注。</label>
-          <textarea id="wf-cf-notes" placeholder="例：用于生产环境黄金30分钟采样"></textarea>
-          <div class="workflow-toggle"><input id="wf-cf-enabled" type="checkbox" checked />启用配置</div>
-          <div class="muted" style="font-size:12px;">关闭后仅表示“逻辑停用”，不会自动停止你外部系统里的真实 cron。</div>
-        </div>`,
-        async () => {
-          const payload = {
-            job_name: (document.getElementById('wf-cf-job-name')?.value || '').trim(),
-            monitor_id: (document.getElementById('wf-cf-monitor-id')?.value || '').trim(),
-            cron_expr: (document.getElementById('wf-cf-cron')?.value || '').trim(),
-            timezone: (document.getElementById('wf-cf-timezone')?.value || '').trim() || 'Asia/Shanghai',
-            retry_policy: document.getElementById('wf-cf-retry')?.value || 'no-retry',
-            notes: (document.getElementById('wf-cf-notes')?.value || '').trim() || null,
-            enabled: Boolean(document.getElementById('wf-cf-enabled')?.checked),
-          };
-          if (!payload.job_name || !payload.monitor_id || !payload.cron_expr) {
-            throw new Error('job_name / monitor_id / cron_expr 必填。');
-          }
-          await fetchJson('/api/v1/public/workflow/external-configs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          setWorkflowResult(`调度配置已保存：${payload.job_name}`);
-          await loadWorkflowState();
-        },
-      );
-    }
-
-    async function openAnalysisModal() {
-      const defaultMonitorId =
-        workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id ||
-        workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id ||
-        '';
-      const defaultKeyword = workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.keyword || '';
-      const monitors = await loadWorkflowMonitors().catch(() => []);
-      const monitorOptions = (monitors || []).map((m) => {
-        const id = String(m.monitor_id || '');
-        const keyword = String(m.keyword || '未命名关键词');
-        const obs = Number(m.observation_count || 0);
-        const selected = id === defaultMonitorId ? ' selected' : '';
-        return `<option value="${htmlEsc(id)}" data-keyword="${htmlEsc(keyword)}"${selected}>${htmlEsc(keyword)}（观测 ${obs}，ID ${htmlEsc(id.slice(0, 8))}）</option>`;
-      }).join('');
-
-      openWorkflowModal(
-        '触发联合分析',
-        `<div class="muted" style="font-size:13px;line-height:1.6;">
-          用途：手动触发一次“价格 + 新闻”联合分析。
-          你可以填写多个关键词（用逗号分隔）做联合新闻证据分析。
-        </div>
-        <div class="workflow-form">
-          <label><strong>选择价格监测任务（推荐）</strong>：可直接按关键词选择。</label>
-          <select id="wf-an-monitor-select" onchange="window.onWorkflowMonitorPicked && window.onWorkflowMonitorPicked(this)">
-            <option value="">-- 请选择已有监测任务 --</option>
-            ${monitorOptions}
-          </select>
-
-          <label><strong>monitor_id（必填）</strong>：自动带入，也可手工修改。</label>
-          <input id="wf-an-monitor-id" placeholder="UUID monitor_id" value="${htmlEsc(defaultMonitorId)}" />
-
-          <label><strong>联合关键词（可选，支持多个）</strong>：逗号、中文逗号或换行分隔。</label>
-          <textarea id="wf-an-keywords" placeholder="例：黄金, 美联储, 美元指数">${htmlEsc(defaultKeyword)}</textarea>
-          <div class="muted" style="font-size:12px;">留空时默认使用 monitor 对应关键词；填写多个时会联合检索新闻并去重分析。</div>
-
-          <label><strong>window_days（必填）</strong>：价格窗口天数。</label>
-          <input id="wf-an-window-days" type="number" min="1" max="365" value="7" />
-          <div class="muted" style="font-size:12px;">表示分析最近 N 天价格区间。</div>
-
-          <label><strong>news_hours（必填）</strong>：新闻回看小时数。</label>
-          <input id="wf-an-news-hours" type="number" min="1" max="720" value="72" />
-          <div class="muted" style="font-size:12px;">表示联合分析会读取最近 N 小时新闻。</div>
-
-          <label><strong>horizon（必填）</strong>：预测展望周期。</label>
-          <select id="wf-an-horizon"><option value="24h" selected>24h（未来24小时）</option><option value="72h">72h（未来72小时）</option><option value="7d">7d（未来7天）</option></select>
-
-          <div class="workflow-toggle"><input id="wf-an-publish" type="checkbox" checked />提交报告到服务器</div>
-          <div class="muted" style="font-size:12px;">勾选：会调用入站发布链路；不勾选：只返回分析结果，不落库。</div>
-        </div>`,
-        async () => {
-          const monitorId = (document.getElementById('wf-an-monitor-id')?.value || '').trim();
-          if (!monitorId) throw new Error('请先选择或填写 monitor_id。');
-          const rawKeywords = (document.getElementById('wf-an-keywords')?.value || '').trim();
-          const keywordList = rawKeywords
-            .split(/[,\\n，]/g)
-            .map((x) => x.trim())
-            .filter((x) => !!x);
-          const payload = {
-            monitor_id: monitorId,
-            keyword: keywordList[0] || null,
-            keywords: keywordList.length ? keywordList : null,
-            window_days: Number(document.getElementById('wf-an-window-days')?.value || 7),
-            news_hours: Number(document.getElementById('wf-an-news-hours')?.value || 72),
-            horizon: document.getElementById('wf-an-horizon')?.value || '24h',
-            publish: Boolean(document.getElementById('wf-an-publish')?.checked),
-          };
-          const out = await fetchJson('/api/v1/public/workflow/analysis/run', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          });
-          setWorkflowResult(
-            `分析完成：预测=${out.forecast || '-'}，置信度=${out.confidence || '-'}，关键词=${(out.keywords_used || []).join('、') || '-'}，ingest_id=${out.ingest_id || '-'}，状态=${out.ingest_status || '-'}`,
-          );
-          await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
-        },
-      );
-
-      window.onWorkflowMonitorPicked = (selectEl) => {
-        const idInput = document.getElementById('wf-an-monitor-id');
-        const kwInput = document.getElementById('wf-an-keywords');
-        if (!selectEl || !idInput || !kwInput) return;
-        const monitorId = String(selectEl.value || '').trim();
-        idInput.value = monitorId;
-        const selected = selectEl.options?.[selectEl.selectedIndex];
-        const pickedKeyword = (selected && selected.dataset && selected.dataset.keyword) || '';
-        if (!kwInput.value.trim() && pickedKeyword) {
-          kwInput.value = pickedKeyword;
-        }
-      };
-    }
-
-    document.getElementById('wf-refresh-btn')?.addEventListener('click', async () => {
-      await Promise.all([loadWorkflowState(), loadOpenClawWorkOverview()]);
-    });
-    document.getElementById('wf-open-wizard-btn')?.addEventListener('click', openWizardModal);
-    document.getElementById('wf-open-bootstrap-btn')?.addEventListener('click', openBootstrapModal);
-    document.getElementById('wf-open-config-btn')?.addEventListener('click', openConfigModal);
-    document.getElementById('wf-open-analysis-btn')?.addEventListener('click', openAnalysisModal);
-    wfModalCancelBtn?.addEventListener('click', closeWorkflowModal);
-    wfModalSubmitBtn?.addEventListener('click', async () => {
-      if (!wfModalSubmitHandler) return;
-      try {
-        wfModalSubmitBtn.disabled = true;
-        await wfModalSubmitHandler();
-        closeWorkflowModal();
-      } catch (e) {
-        setWorkflowResult(`操作失败：${e?.message || '未知错误'}`);
-      } finally {
-        wfModalSubmitBtn.disabled = false;
-      }
-    });
-    wfModal?.addEventListener('click', (e) => {
-      if (e.target === wfModal) closeWorkflowModal();
-    });
     document.getElementById('dark-mode-btn')?.addEventListener('click', (e) => {
       // Keep inline onclick behavior, but ensure button label sync even in cached pages.
       e.currentTarget.blur();
@@ -1831,9 +1276,7 @@ def index(page: str | None = None) -> HTMLResponse:
     connectChatWs();
 
     setupDarkMode();
-    loadOpenClawWorkOverview();
     loadWorkflowState();
-    setInterval(loadOpenClawWorkOverview, 30 * 60 * 1000);
     setInterval(loadWorkflowState, 5 * 60 * 1000);
   </script>
 </body>
@@ -2032,7 +1475,7 @@ def index(page: str | None = None) -> HTMLResponse:
     <div class="wrap topbar-inner">
       <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
-        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
@@ -2041,6 +1484,7 @@ def index(page: str | None = None) -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
+        <li><a href="/workflow">工作流管理</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
         <li class="active"><a href="/topic-analysis">专题分析</a></li>
@@ -2101,12 +1545,20 @@ def index(page: str | None = None) -> HTMLResponse:
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      syncDarkModeButtonLabel();
     }
 
     function setupDarkMode() {
       if (localStorage.getItem('oc_dark') === '1') {
         document.body.classList.add('dark');
       }
+      syncDarkModeButtonLabel();
+    }
+
+    function syncDarkModeButtonLabel() {
+      const btn = document.getElementById('dark-mode-btn');
+      if (!btn) return;
+      btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）';
     }
 
     function markdownToHtml(md) {
@@ -3105,13 +2557,344 @@ def _openclaw_work_overview_public(app_obj: FastAPI) -> dict:
         "recent_runs": _external_scheduler_run_history_public(limit=12).get("runs", []),
     }
 
+    gateway = _openclaw_gateway_status_public()
+
     return {
+        "gateway": gateway,
         "reports": reports,
         "price_monitoring": price,
         "news_library": news,
         "external_cron": {"job_count": len(jobs), "jobs": jobs},
         "workflow": workflow,
         "refresh_hint_seconds": 1800,
+    }
+
+
+def _openclaw_gateway_status_public() -> dict:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    ws_url = (settings.openclaw_ws_url or "").strip()
+    if not ws_url:
+        return {
+            "ok": False,
+            "ready": False,
+            "checked_at": checked_at,
+            "ws_url": "",
+            "latency_ms": None,
+            "detail": "OPENCLAW_OPENCLAW_WS_URL is empty",
+        }
+    try:
+        probe = asyncio.run(
+            probe_openclaw_gateway(
+                openclaw_ws_url=ws_url,
+                timeout_seconds=settings.openclaw_gateway_probe_timeout_seconds,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        probe = {
+            "ok": False,
+            "ready": False,
+            "latency_ms": None,
+            "detail": f"{exc.__class__.__name__}: {exc}",
+        }
+    return {
+        "ok": bool(probe.get("ok")),
+        "ready": bool(probe.get("ready")),
+        "checked_at": checked_at,
+        "ws_url": ws_url,
+        "latency_ms": probe.get("latency_ms"),
+        "detail": probe.get("detail"),
+    }
+
+
+def _check_postgres_dsn_public(*, key: str, label: str, dsn: str | None) -> dict:
+    if not (dsn or "").strip():
+        return {
+            "key": key,
+            "label": label,
+            "ok": False,
+            "severity": "warn",
+            "detail": "未配置数据库连接串",
+            "hint": f"请设置环境变量并重启服务：{key.upper()} 对应 DSN",
+        }
+    try:
+        import psycopg
+
+        with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+        return {
+            "key": key,
+            "label": label,
+            "ok": True,
+            "severity": "ok",
+            "detail": "连接正常",
+            "hint": "",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "key": key,
+            "label": label,
+            "ok": False,
+            "severity": "error",
+            "detail": str(exc),
+            "hint": "检查 PostgreSQL 是否运行、账号权限与 DSN 是否一致",
+        }
+
+
+def _workflow_diagnostics_public(app_obj: FastAPI) -> dict:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    checks: list[dict] = []
+
+    gateway = _openclaw_gateway_status_public()
+    checks.append(
+        {
+            "key": "gateway",
+            "label": "OpenClaw Gateway",
+            "ok": bool(gateway.get("ok")),
+            "severity": "ok" if gateway.get("ok") else "error",
+            "detail": gateway.get("detail") or "-",
+            "hint": "确认 OpenClaw Gateway sidecar 已启动，且 OPENCLAW_OPENCLAW_WS_URL 可访问",
+            "extra": {"ws_url": gateway.get("ws_url"), "latency_ms": gateway.get("latency_ms")},
+        }
+    )
+    checks.append(
+        _check_postgres_dsn_public(
+            key="openclaw_database_url",
+            label="报告数据库（openclaw_app）",
+            dsn=settings.database_url,
+        )
+    )
+    checks.append(
+        _check_postgres_dsn_public(
+            key="openclaw_monitoring_database_url",
+            label="价格数据库（openclaw_monitor）",
+            dsn=settings.monitoring_database_url,
+        )
+    )
+    checks.append(
+        _check_postgres_dsn_public(
+            key="openclaw_news_database_url",
+            label="新闻数据库（openclaw_news）",
+            dsn=settings.news_database_url,
+        )
+    )
+
+    configs = _external_scheduler_configs_public().get("configs", [])
+    enabled_configs = [row for row in configs if bool(row.get("enabled"))]
+    checks.append(
+        {
+            "key": "external_scheduler_configs",
+            "label": "外部调度配置",
+            "ok": bool(configs),
+            "severity": "ok" if configs else "warn",
+            "detail": f"总配置数={len(configs)}，启用中={len(enabled_configs)}",
+            "hint": "建议至少配置 1 个外部调度任务，并绑定 monitor_id",
+        }
+    )
+    recent_runs = _external_scheduler_run_history_public(limit=1).get("runs", [])
+    if not recent_runs:
+        checks.append(
+            {
+                "key": "external_scheduler_recent_run",
+                "label": "最近调度运行",
+                "ok": not enabled_configs,
+                "severity": "warn" if enabled_configs else "ok",
+                "detail": "无运行历史",
+                "hint": "若已启用调度，请确认外部任务执行后会调用 external-heartbeat",
+            }
+        )
+    else:
+        row = recent_runs[0]
+        status = str(row.get("status") or "unknown").lower()
+        checks.append(
+            {
+                "key": "external_scheduler_recent_run",
+                "label": "最近调度运行",
+                "ok": status == "ok",
+                "severity": "ok" if status == "ok" else "warn",
+                "detail": f"job={row.get('job_name') or '-'} status={status} at={row.get('last_seen_at') or '-'}",
+                "hint": "当 status 非 ok 时，先检查采集脚本日志与 API 返回错误",
+            }
+        )
+    errors = sum(1 for item in checks if item.get("severity") == "error")
+    warns = sum(1 for item in checks if item.get("severity") == "warn")
+    return {
+        "checked_at": checked_at,
+        "ok": errors == 0,
+        "error_count": errors,
+        "warn_count": warns,
+        "checks": checks,
+    }
+
+
+def _workflow_run_readiness_public(app_obj: FastAPI, monitor_id: str | None = None) -> dict:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    checks: list[dict] = []
+    overview = _openclaw_work_overview_public(app_obj)
+    selected_monitor_id = (
+        (monitor_id or "").strip()
+        or str(((overview.get("price_monitoring") or {}).get("recent") or [{}])[0].get("monitor_id") or "").strip()
+    )
+    gateway = _openclaw_gateway_status_public()
+    checks.append(
+        {
+            "key": "gateway",
+            "label": "OpenClaw Gateway",
+            "ok": bool(gateway.get("ok")),
+            "severity": "ok" if gateway.get("ok") else "error",
+            "detail": gateway.get("detail") or "-",
+            "hint": "请先确保 OpenClaw Gateway sidecar 已启动并可访问",
+        }
+    )
+    if not selected_monitor_id:
+        checks.append(
+            {
+                "key": "monitor_selection",
+                "label": "monitor 选择",
+                "ok": False,
+                "severity": "error",
+                "detail": "未找到可用 monitor_id",
+                "hint": "请先在网页创建监测任务，或在请求中传入 monitor_id",
+            }
+        )
+        errors = sum(1 for item in checks if item.get("severity") == "error")
+        warns = sum(1 for item in checks if item.get("severity") == "warn")
+        return {
+            "checked_at": checked_at,
+            "ok": errors == 0,
+            "error_count": errors,
+            "warn_count": warns,
+            "selected_monitor_id": "",
+            "checks": checks,
+        }
+    summary: dict = {}
+    if not settings.monitoring_database_url:
+        checks.append(
+            {
+                "key": "monitoring_db",
+                "label": "价格数据库",
+                "ok": False,
+                "severity": "error",
+                "detail": "未配置 OPENCLAW_MONITORING_DATABASE_URL",
+                "hint": "请先配置 monitoring DB 并重启服务",
+            }
+        )
+    else:
+        try:
+            summary = MonitoringService(settings.monitoring_database_url).get_summary(
+                monitor_id=selected_monitor_id,
+                window_days=7,
+            )
+            obs_count = int(summary.get("observation_count") or 0)
+            checks.append(
+                {
+                    "key": "monitor_observations",
+                    "label": "monitor 观测数据",
+                    "ok": obs_count > 0,
+                    "severity": "ok" if obs_count > 0 else "warn",
+                    "detail": f"monitor={selected_monitor_id} 最近7天观测={obs_count}",
+                    "hint": "若为 0，请先让 OpenClaw/外部任务写入 observations/ingest",
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            checks.append(
+                {
+                    "key": "monitor_observations",
+                    "label": "monitor 观测数据",
+                    "ok": False,
+                    "severity": "error",
+                    "detail": str(exc),
+                    "hint": "确认 monitor_id 是否存在且 monitoring DB 可访问",
+                }
+            )
+    configs = _external_scheduler_configs_public().get("configs", [])
+    monitor_cfg = [row for row in configs if str(row.get("monitor_id") or "").strip() == selected_monitor_id and bool(row.get("enabled"))]
+    checks.append(
+        {
+            "key": "scheduler_binding",
+            "label": "外部调度绑定",
+            "ok": bool(monitor_cfg),
+            "severity": "ok" if monitor_cfg else "warn",
+            "detail": f"monitor 绑定的启用配置数={len(monitor_cfg)}",
+            "hint": "建议至少存在 1 条 enabled 调度配置，确保持续采集",
+        }
+    )
+    recent_runs = _external_scheduler_run_history_public(limit=200).get("runs", [])
+    monitor_runs = [row for row in recent_runs if str(row.get("monitor_id") or "").strip() == selected_monitor_id]
+    if not monitor_runs:
+        checks.append(
+            {
+                "key": "scheduler_heartbeat",
+                "label": "最近心跳",
+                "ok": False,
+                "severity": "warn",
+                "detail": "该 monitor 暂无 external-heartbeat 记录",
+                "hint": "请检查外部任务执行后是否调用了 external-heartbeat",
+            }
+        )
+    else:
+        latest = monitor_runs[0]
+        status = str(latest.get("status") or "unknown").lower()
+        seen_at = _parse_iso_dt(str(latest.get("last_seen_at") or ""))
+        stale = True
+        if seen_at is not None:
+            stale = (datetime.now(timezone.utc) - seen_at.astimezone(timezone.utc)) > timedelta(hours=24)
+        ok = status == "ok" and not stale
+        checks.append(
+            {
+                "key": "scheduler_heartbeat",
+                "label": "最近心跳",
+                "ok": ok,
+                "severity": "ok" if ok else "warn",
+                "detail": f"status={status} last_seen_at={latest.get('last_seen_at') or '-'} stale={stale}",
+                "hint": "建议至少每24小时有一次 status=ok 的心跳",
+            }
+        )
+    try:
+        analysis = _build_news_price_analysis(
+            monitor_id=selected_monitor_id,
+            keyword=None,
+            keywords=None,
+            window_days=7,
+            news_hours=72,
+            horizon="24h",
+        )
+        evidence = analysis.get("news_evidence") or []
+        price_snapshot = analysis.get("price_snapshot") or {}
+        checks.append(
+            {
+                "key": "analysis_dry_run",
+                "label": "联合分析链路",
+                "ok": True,
+                "severity": "ok",
+                "detail": "dry-run 成功："
+                + f"forecast={analysis.get('forecast') or '-'} "
+                + f"news_count={len(evidence)} "
+                + f"price_obs={price_snapshot.get('observation_count') or 0}",
+                "hint": "链路可执行；如需产出报告可点击“立即生成联合分析”",
+            }
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            {
+                "key": "analysis_dry_run",
+                "label": "联合分析链路",
+                "ok": False,
+                "severity": "error",
+                "detail": str(exc),
+                "hint": "请先修复数据库配置、monitor 数据或新闻库连接后重试",
+            }
+        )
+    errors = sum(1 for item in checks if item.get("severity") == "error")
+    warns = sum(1 for item in checks if item.get("severity") == "warn")
+    return {
+        "checked_at": checked_at,
+        "ok": errors == 0,
+        "error_count": errors,
+        "warn_count": warns,
+        "selected_monitor_id": selected_monitor_id,
+        "selected_keyword": str(summary.get("keyword") or ""),
+        "checks": checks,
     }
 
 
@@ -3434,10 +3217,26 @@ def public_workflow_state(request: Request) -> dict:
     runs = _external_scheduler_run_history_public(limit=60)
     return {
         "overview": overview,
+        "gateway": overview.get("gateway") or _openclaw_gateway_status_public(),
         "internal_scheduler": scheduler,
         "external_scheduler_configs": configs.get("configs", []),
         "external_scheduler_runs": runs.get("runs", []),
     }
+
+
+@app.get("/api/v1/public/workflow/gateway-status", summary="OpenClaw Gateway 连通性")
+def public_workflow_gateway_status() -> dict:
+    return _openclaw_gateway_status_public()
+
+
+@app.get("/api/v1/public/workflow/diagnostics", summary="工作流一键诊断")
+def public_workflow_diagnostics(request: Request) -> dict:
+    return _workflow_diagnostics_public(request.app)
+
+
+@app.get("/api/v1/public/workflow/run-readiness", summary="工作流可运行性验证")
+def public_workflow_run_readiness(request: Request, monitor_id: str | None = None) -> dict:
+    return _workflow_run_readiness_public(request.app, monitor_id=monitor_id)
 
 
 @app.get("/api/v1/public/workflow/external-runs", summary="外部调度运行历史")
@@ -3661,7 +3460,7 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
     <div class="wrap topbar-inner">
       <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
-        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
@@ -3671,6 +3470,7 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li{ ' class="active"' if active_nav_key == "home" else ""}><a href="/">门户首页</a></li>
+        <li{ ' class="active"' if active_nav_key == "workflow" else ""}><a href="/workflow">工作流管理</a></li>
         <li{ ' class="active"' if active_nav_key == "news" else ""}><a href="/?page=news">新闻动态</a></li>
         <li{ ' class="active"' if active_nav_key == "price" else ""}><a href="/price-trend">价格趋势</a></li>
         <li{ ' class="active"' if active_nav_key == "topic" else ""}><a href="/topic-analysis">专题分析</a></li>
@@ -3691,11 +3491,18 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
     function toggleDarkMode() {{
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      syncDarkModeButtonLabel();
     }}
     function setupDarkMode() {{
       if (localStorage.getItem('oc_dark') === '1') {{
         document.body.classList.add('dark');
       }}
+      syncDarkModeButtonLabel();
+    }}
+    function syncDarkModeButtonLabel() {{
+      const btn = document.getElementById('dark-mode-btn');
+      if (!btn) return;
+      btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）';
     }}
     setupDarkMode();
   </script>
@@ -3708,6 +3515,218 @@ def _coming_soon_page(title: str, active_nav_key: str) -> HTMLResponse:
 @app.get("/topic-analysis", summary="专题分析页面")
 def topic_analysis_page() -> HTMLResponse:
     return RedirectResponse(url="/?page=topic")
+
+
+@app.get("/workflow", summary="工作流管理页面")
+def workflow_page() -> HTMLResponse:
+    return HTMLResponse(
+        """
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>工作流管理</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --surface: #ffffff;
+      --surface-2: #f1f3f7;
+      --text: #1f2937;
+      --muted: #6b7280;
+      --line: #d8dee8;
+      --brand: #0b4fa3;
+      --link: #164b91;
+      --header: #0a2f66;
+      --header-text: #ffffff;
+    }
+    body.dark {
+      --bg: #0f1218;
+      --surface: #171c25;
+      --surface-2: #202735;
+      --text: #e6edf7;
+      --muted: #9fb0c9;
+      --line: #2c3444;
+      --brand: #66a3ff;
+      --link: #8eb8ff;
+      --header: #101624;
+      --header-text: #f3f6fd;
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background:var(--bg); color:var(--text); }
+    .topbar { background:var(--header); color:var(--header-text); border-bottom:1px solid rgba(255,255,255,.15); }
+    .wrap { width:min(1200px,100% - 28px); margin:0 auto; }
+    .topbar-inner { display:flex; align-items:center; justify-content:space-between; padding:12px 0; }
+    .logo { font-size:20px; font-weight:700; letter-spacing:.5px; }
+    .top-actions { display:flex; gap:8px; align-items:center; }
+    .top-actions button { border:1px solid rgba(255,255,255,.35); background:rgba(255,255,255,.08); color:var(--header-text); padding:7px 12px; border-radius:12px; cursor:pointer; font-size:14px; }
+    .nav { background:var(--surface); border-bottom:1px solid var(--line); margin-bottom:14px; }
+    .nav ul { list-style:none; margin:0; padding:0; display:flex; gap:18px; overflow-x:auto; white-space:nowrap; }
+    .nav li, .nav a { padding:12px 0; border-bottom:2px solid transparent; cursor:pointer; color:inherit; display:inline-block; text-decoration:none; }
+    .nav li.active { border-color:var(--brand); color:var(--brand); font-weight:600; }
+    .page-header { margin:18px 0 14px; }
+    .page-header h1 { margin:0 0 8px; color:var(--brand); }
+    .page-header p { margin:0; color:var(--muted); line-height:1.6; }
+    .layout { display:grid; grid-template-columns: 420px 1fr; gap:16px; padding-bottom:20px; }
+    .card { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px; }
+    .card-title { font-size:18px; font-weight:700; color:var(--brand); margin-bottom:8px; }
+    .muted { color:var(--muted); font-size:13px; }
+    .guide-list { display:grid; gap:10px; margin-top:10px; }
+    .guide-item { border:1px dashed var(--line); border-radius:12px; padding:10px; background:var(--surface-2); }
+    .guide-item .t { font-weight:700; margin-bottom:4px; }
+    .workflow-grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); margin-top:10px; }
+    .workflow-box { border:1px dashed var(--line); border-radius:12px; padding:10px; background:var(--surface-2); }
+    .workflow-box .k { font-size:12px; color:var(--muted); margin-bottom:4px; }
+    .workflow-box .v { font-size:14px; font-weight:700; color:var(--brand); }
+    .action-grid { display:grid; gap:10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); margin-top:10px; }
+    .action-btn { text-align:left; border:1px solid var(--line); background:var(--surface); color:var(--text); border-radius:12px; padding:10px 12px; cursor:pointer; font:inherit; }
+    .action-btn:hover { background:var(--surface-2); }
+    .action-btn strong { display:block; font-size:14px; margin-bottom:4px; color:var(--brand); }
+    .action-btn span { display:block; font-size:12px; color:var(--muted); line-height:1.45; }
+    .workflow-result { margin-top:10px; border:1px dashed var(--line); border-radius:10px; padding:10px; font-size:12px; color:var(--muted); white-space:pre-wrap; min-height:84px; }
+    .workflow-log { margin-top:10px; border:1px solid var(--line); border-radius:12px; background:var(--surface-2); max-height:220px; overflow:auto; }
+    .workflow-log-item { border-bottom:1px dashed var(--line); padding:8px 10px; font-size:12px; color:var(--muted); }
+    .workflow-log-item:last-child { border-bottom:none; }
+    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); display:none; align-items:center; justify-content:center; padding:18px; z-index:1000; }
+    .modal { width:min(760px,100%); background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:16px 16px 14px; box-shadow:0 18px 40px rgba(0,0,0,.35); }
+    .modal-title { font-weight:800; color:var(--brand); margin:0 0 8px; }
+    .modal-body { color:var(--text); white-space:pre-wrap; line-height:1.6; }
+    .modal-actions { display:flex; justify-content:flex-end; margin-top:14px; gap:8px; }
+    .btn { border:1px solid var(--line); background:var(--surface-2); color:var(--text); padding:8px 12px; border-radius:10px; cursor:pointer; }
+    .btn.primary { background:var(--brand); color:#fff; border-color:var(--brand); }
+    .workflow-form { display:grid; gap:8px; margin-top:8px; }
+    .workflow-form input, .workflow-form select, .workflow-form textarea { width:100%; border:1px solid var(--line); background:var(--surface-2); color:var(--text); border-radius:10px; padding:8px 10px; font-family:inherit; }
+    .workflow-form textarea { min-height:72px; resize:vertical; }
+    .workflow-toggle { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--muted); }
+    @media (max-width: 1040px) { .layout { grid-template-columns:1fr; } .action-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <div class="topbar"><div class="wrap topbar-inner"><div class="logo">OpenClaw市场趋势自动化分析平台</div><div class="top-actions"><button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button><button onclick="location.href='/docs'">接口文档</button></div></div></div>
+  <div class="nav"><div class="wrap"><ul id="category-nav"><li><a href="/">门户首页</a></li><li class="active"><a href="/workflow">工作流管理</a></li><li><a href="/?page=news">新闻动态</a></li><li><a href="/price-trend">价格趋势</a></li><li><a href="/topic-analysis">专题分析</a></li><li><a href="/keyword-tracking">监测参数</a></li></ul></div></div>
+
+  <div class="wrap">
+    <div class="page-header"><h1>工作流管理</h1><p>在本页完成“建监测任务 → 配调度 → 诊断验证 → 触发联合分析”全流程，非技术用户也可直接操作。</p></div>
+    <div class="layout">
+      <div class="card">
+        <div class="card-title">操作说明</div>
+        <div class="muted">建议按步骤执行。</div>
+        <div class="guide-list">
+          <div class="guide-item"><div class="t">步骤 1：准备监测任务</div><div class="muted">没有监测任务时，先点“新建监测任务”或“新手一键配置”。</div></div>
+          <div class="guide-item"><div class="t">步骤 2：配置外部定时任务</div><div class="muted">频率改为“X天X小时X分钟”，系统自动生成 cron。</div></div>
+          <div class="guide-item"><div class="t">步骤 3：诊断与验证</div><div class="muted">先点“一键诊断”和“一键可运行性验证”，确认可运行再触发分析。</div></div>
+          <div class="guide-item"><div class="t">步骤 4：触发联合分析</div><div class="muted">支持多个关键词，并可选择是否发布报告。</div></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">工作流控制台</div>
+        <div class="muted">状态指标 + 操作入口 + 运行日志</div>
+        <div class="workflow-grid">
+          <div class="workflow-box"><div class="k">监测任务</div><div class="v" id="wf-monitor-count">-</div></div>
+          <div class="workflow-box"><div class="k">价格观测</div><div class="v" id="wf-observation-count">-</div></div>
+          <div class="workflow-box"><div class="k">已配置定时任务</div><div class="v" id="wf-config-count">-</div></div>
+          <div class="workflow-box"><div class="k">最近一次运行</div><div class="v" id="wf-last-run">-</div></div>
+          <div class="workflow-box"><div class="k">Gateway 连通性</div><div class="v" id="wf-gateway-status">-</div></div>
+        </div>
+        <div class="muted" style="margin-top:10px;">执行操作</div>
+        <div class="action-grid">
+          <button class="action-btn" id="wf-open-wizard-btn" type="button"><strong>新手一键配置</strong><span>一次完成“创建监测任务 + 保存定时配置 + 可选生成报告”。</span></button>
+          <button class="action-btn" id="wf-open-remediation-btn" type="button"><strong>一键修复向导</strong><span>根据诊断结果自动补齐缺失项，减少手动操作。</span></button>
+          <button class="action-btn" id="wf-open-bootstrap-btn" type="button"><strong>新建监测任务</strong><span>只创建监测任务，不自动触发调度和分析。</span></button>
+          <button class="action-btn" id="wf-open-config-btn" type="button"><strong>配置外部定时任务</strong><span>维护任务名、监测任务、执行频率和时区。</span></button>
+          <button class="action-btn" id="wf-open-analysis-btn" type="button"><strong>立即生成联合分析</strong><span>手动触发“价格 + 新闻”分析，可选发布。</span></button>
+          <button class="action-btn" id="wf-refresh-btn" type="button"><strong>更新工作流状态</strong><span>刷新指标和运行日志。</span></button>
+        </div>
+        <div class="muted" style="margin-top:10px;">诊断与验证</div>
+        <div class="action-grid">
+          <button class="action-btn" id="wf-run-diagnostics-btn" type="button"><strong>一键诊断</strong><span>检查 Gateway、数据库、调度配置和运行状态。</span></button>
+          <button class="action-btn" id="wf-run-readiness-btn" type="button"><strong>一键可运行性验证</strong><span>基于监测任务验证观测、心跳和分析链路。</span></button>
+        </div>
+        <div id="wf-result" class="workflow-result">等待操作...</div>
+        <div class="workflow-log" id="wf-run-log" title="仅显示最新一条工作流运行记录"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="wf-modal" class="modal-overlay" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3 class="modal-title" id="wf-modal-title">工作流向导</h3>
+      <div class="modal-body" id="wf-modal-body"></div>
+      <div class="modal-actions"><button class="btn" id="wf-modal-cancel-btn" type="button">关闭</button><button class="btn primary" id="wf-modal-submit-btn" type="button">提交</button></div>
+    </div>
+  </div>
+
+  <script>
+    function toggleDarkMode() { document.body.classList.toggle('dark'); localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0'); syncDarkModeButtonLabel(); }
+    function setupDarkMode() { if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark'); syncDarkModeButtonLabel(); }
+    function syncDarkModeButtonLabel() { const btn = document.getElementById('dark-mode-btn'); if (!btn) return; btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）'; }
+    function formatCnLocalDateTime(raw) { if (raw == null || raw === '') return '-'; const t = Date.parse(String(raw)); if (!Number.isFinite(t)) return String(raw); const d = new Date(t); return `${d.getFullYear()}年${String(d.getMonth()+1).padStart(2,'0')}月${String(d.getDate()).padStart(2,'0')}日${String(d.getHours()).padStart(2,'0')}：${String(d.getMinutes()).padStart(2,'0')}`; }
+    function htmlEsc(text) { return String(text ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;'); }
+    async function fetchJson(url, options = {}) { const res = await fetch(url, options); let payload = null; try { payload = await res.json(); } catch (e) {} if (!res.ok) { throw new Error(payload?.detail || payload?.error || `HTTP ${res.status}`); } return payload; }
+
+    const wfResult = document.getElementById('wf-result');
+    const wfRunLog = document.getElementById('wf-run-log');
+    const wfMonitorCount = document.getElementById('wf-monitor-count');
+    const wfObservationCount = document.getElementById('wf-observation-count');
+    const wfConfigCount = document.getElementById('wf-config-count');
+    const wfLastRun = document.getElementById('wf-last-run');
+    const wfGatewayStatus = document.getElementById('wf-gateway-status');
+    const wfModal = document.getElementById('wf-modal');
+    const wfModalTitle = document.getElementById('wf-modal-title');
+    const wfModalBody = document.getElementById('wf-modal-body');
+    const wfModalCancelBtn = document.getElementById('wf-modal-cancel-btn');
+    const wfModalSubmitBtn = document.getElementById('wf-modal-submit-btn');
+    let wfModalSubmitHandler = null;
+    let workflowStateCache = null;
+    let workflowMonitorsCache = [];
+    let wfResultLockUntilMs = 0;
+    const TIMEZONE_OPTIONS = [
+      { value: 'Asia/Shanghai', label: '中国标准时间（Asia/Shanghai）' },
+      { value: 'Asia/Hong_Kong', label: '香港时间（Asia/Hong_Kong）' },
+      { value: 'UTC', label: '协调世界时（UTC）' },
+      { value: 'America/New_York', label: '纽约时间（America/New_York）' },
+      { value: 'Europe/London', label: '伦敦时间（Europe/London）' },
+    ];
+    function setWorkflowResult(text, options = {}) { if (wfResult) wfResult.textContent = text; const stickyMs = Number(options?.stickyMs || 0); if (stickyMs > 0) wfResultLockUntilMs = Date.now() + stickyMs; }
+    function openWorkflowModal(title, html, onSubmit) { wfModalTitle.textContent = title; wfModalBody.innerHTML = html; wfModal.style.display = 'flex'; wfModalSubmitHandler = onSubmit; }
+    function closeWorkflowModal() { wfModal.style.display = 'none'; wfModalSubmitHandler = null; wfModalBody.innerHTML = ''; }
+    function renderWorkflowRunLog(runs) { wfRunLog.innerHTML=''; const rows = Array.isArray(runs)?runs:[]; if(!rows.length){ wfRunLog.innerHTML='<div class="workflow-log-item">暂无外部调度运行记录。</div>'; return; } const run=rows[0]; const div=document.createElement('div'); div.className='workflow-log-item'; div.textContent=`[${formatCnLocalDateTime(run.last_seen_at)}] ${run.job_name||'-'} / ${run.status||'unknown'} / monitor=${(run.monitor_id||'-').slice(0,8)} / ${run.message||'-'}`; wfRunLog.appendChild(div); }
+    function renderWorkflowState(state) { workflowStateCache = state || null; const ov=state?.overview||{}; const price=ov.price_monitoring||{}; const gateway=state?.gateway||ov.gateway||{}; const runs=Array.isArray(state?.external_scheduler_runs)?state.external_scheduler_runs:[]; const cfgs=Array.isArray(state?.external_scheduler_configs)?state.external_scheduler_configs:[]; wfMonitorCount.textContent=String(price.monitor_count??0); wfObservationCount.textContent=String(price.observation_count??0); wfConfigCount.textContent=String(cfgs.length); wfLastRun.textContent=runs.length?formatCnLocalDateTime(runs[0].last_seen_at):'-'; wfGatewayStatus.textContent=gateway.ok?'在线':'离线'; renderWorkflowRunLog(runs); }
+    async function loadWorkflowState(showToast=false) { try { const state=await fetchJson('/api/v1/public/workflow/state'); renderWorkflowState(state); if (showToast) setWorkflowResult('工作流状态已刷新。',{stickyMs:15000}); else if (Date.now() >= wfResultLockUntilMs) setWorkflowResult('工作流状态已刷新。'); } catch(e){ setWorkflowResult(`工作流状态加载失败：${e?.message||'未知错误'}`,{stickyMs:60000}); } }
+    async function loadWorkflowMonitors() { const arr=await fetchJson('/api/v1/public/monitoring/monitors'); workflowMonitorsCache=Array.isArray(arr)?arr:[]; return workflowMonitorsCache; }
+    function buildOptions(maxValue, selectedValue, suffix) { const out=[]; for(let i=0;i<=maxValue;i+=1){ out.push(`<option value="${i}"${i===selectedValue?' selected':''}>${i}${suffix}</option>`);} return out.join(''); }
+    function renderTimezoneOptions(selected='Asia/Shanghai'){ return TIMEZONE_OPTIONS.map(row=>`<option value="${row.value}"${row.value===selected?' selected':''}>${row.label}</option>`).join(''); }
+    function renderIntervalControls(prefix, defaults={}) { const days=Number(defaults.days??0), hours=Number(defaults.hours??0), minutes=Number(defaults.minutes??30), timezone=defaults.timezone||'Asia/Shanghai'; return `<label><strong>执行频率（自动转换为 cron）</strong></label><div style="display:grid;grid-template-columns:repeat(3,minmax(100px,1fr));gap:8px;"><select id="${prefix}-days">${buildOptions(30,days,'天')}</select><select id="${prefix}-hours">${buildOptions(23,hours,'小时')}</select><select id="${prefix}-minutes">${buildOptions(59,minutes,'分钟')}</select></div><div class="muted" style="font-size:12px;">填写“X天X小时X分钟”，系统会自动生成标准 cron 表达式。</div><label><strong>时区（选择）</strong></label><select id="${prefix}-timezone">${renderTimezoneOptions(timezone)}</select>`; }
+    function buildCronExpr(days,hours,minutes){ const d=Math.max(0,Number(days)||0), h=Math.max(0,Number(hours)||0), m=Math.max(0,Number(minutes)||0); if(d<=0&&h<=0){ const step=Math.max(1,Math.min(m||30,59)); return `*/${step} * * * *`; } if(d<=0){ const hs=Math.max(1,Math.min(h,23)); const ma=Math.max(0,Math.min(m,59)); return `${ma} */${hs} * * *`; } const ds=Math.max(1,Math.min(d,31)); const ha=Math.max(0,Math.min(h,23)); const ma=Math.max(0,Math.min(m,59)); return `${ma} ${ha} */${ds} * *`; }
+    function readScheduleConfig(prefix){ const days=Number(document.getElementById(`${prefix}-days`)?.value||0); const hours=Number(document.getElementById(`${prefix}-hours`)?.value||0); const minutes=Number(document.getElementById(`${prefix}-minutes`)?.value||0); const timezone=document.getElementById(`${prefix}-timezone`)?.value||'Asia/Shanghai'; return { cron_expr: buildCronExpr(days,hours,minutes), timezone, readable: `${days}天${hours}小时${minutes}分钟` }; }
+    function slugifyKeywordForJobName(keyword){ return String(keyword||'').trim().toLowerCase().replaceAll(/[^a-z0-9\\u4e00-\\u9fa5]+/g,'-').replaceAll(/^-+|-+$/g,'').slice(0,36); }
+    function suggestJobNameByKeyword(keyword){ return `openclaw-${slugifyKeywordForJobName(keyword)||'monitor'}-ingest`; }
+
+    async function runWorkflowDiagnostics(){ try{ const diag=await fetchJson('/api/v1/public/workflow/diagnostics'); const checks=Array.isArray(diag?.checks)?diag.checks:[]; const lines=[`诊断完成：${diag.ok?'无阻断错误':'存在阻断错误'}，error=${diag.error_count??0}，warn=${diag.warn_count??0}`,`检查时间：${formatCnLocalDateTime(diag.checked_at)}`]; for(const item of checks){ const level=item?.severity==='error'?'ERROR':item?.severity==='warn'?'WARN':'OK'; lines.push(`[${level}] ${item?.label||'-'}`); lines.push(`  - 结果：${item?.detail||'-'}`); const extra=item?.extra||{}; if(extra?.ws_url||extra?.latency_ms!==undefined) lines.push(`  - 连接：url=${extra.ws_url||'-'}，latency_ms=${extra.latency_ms??'-'}`); if(item?.hint) lines.push(`  - 建议：${item.hint}`);} setWorkflowResult(lines.join('\\n'),{stickyMs:10*60*1000}); await loadWorkflowState(false);}catch(e){ setWorkflowResult(`一键诊断失败：${e?.message||'未知错误'}`,{stickyMs:60000}); } }
+    async function runWorkflowReadinessCheck(){ try{ const monitorId=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id||workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id||''; const url=monitorId?`/api/v1/public/workflow/run-readiness?monitor_id=${encodeURIComponent(monitorId)}`:'/api/v1/public/workflow/run-readiness'; const ready=await fetchJson(url); const checks=Array.isArray(ready?.checks)?ready.checks:[]; const lines=[`可运行性验证：${ready.ok?'可运行':'存在阻断项'}，error=${ready.error_count??0}，warn=${ready.warn_count??0}`,`检查时间：${formatCnLocalDateTime(ready.checked_at)}`,`monitor_id：${ready.selected_monitor_id||'-'}`]; if(ready.selected_keyword) lines.push(`关键词：${ready.selected_keyword}`); for(const item of checks){ const level=item?.severity==='error'?'ERROR':item?.severity==='warn'?'WARN':'OK'; lines.push(`[${level}] ${item?.label||'-'}`); lines.push(`  - 结果：${item?.detail||'-'}`); if(item?.hint) lines.push(`  - 建议：${item.hint}`);} setWorkflowResult(lines.join('\\n'),{stickyMs:10*60*1000}); await loadWorkflowState(false);}catch(e){ setWorkflowResult(`可运行性验证失败：${e?.message||'未知错误'}`,{stickyMs:60000}); } }
+    function openWizardModal(){ openWorkflowModal('首次配置向导',`<div class="muted" style="font-size:13px;line-height:1.6;">用途：一次性完成最小闭环配置（关键词→创建监测任务→保存调度配置）。</div><div class="workflow-form"><label><strong>关键词（必填）</strong></label><input id="wf-wz-keyword" placeholder="例：黄金 / 原油" /><label><strong>采样节奏</strong></label><select id="wf-wz-cadence"><option value="hourly">小时级</option><option value="daily" selected>天级</option></select><label><strong>任务名称（建议填写）</strong></label><input id="wf-wz-job-name" placeholder="例：openclaw-gold-ingest" />${renderIntervalControls('wf-wz',{days:0,hours:0,minutes:30,timezone:'Asia/Shanghai'})}<div class="workflow-toggle"><input id="wf-wz-publish" type="checkbox" checked />生成分析后自动发布报告</div></div>`, async()=>{ const keyword=(document.getElementById('wf-wz-keyword')?.value||'').trim(); if(!keyword) throw new Error('请先填写关键词。'); const cadence=document.getElementById('wf-wz-cadence')?.value||'daily'; const schedule=readScheduleConfig('wf-wz'); const jobName=(document.getElementById('wf-wz-job-name')?.value||'').trim()||`openclaw-${keyword}-job`; const publish=Boolean(document.getElementById('wf-wz-publish')?.checked); const boot=await fetchJson('/api/v1/public/workflow/monitor/bootstrap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword,cadence,source_profile:'auto',platforms:['news'],candidate_count:10})}); const monitorId=boot.monitor_id; await fetchJson('/api/v1/public/workflow/external-configs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_name:jobName,monitor_id:monitorId,cron_expr:schedule.cron_expr,timezone:schedule.timezone,enabled:true,retry_policy:'no-retry',notes:`由网页首次向导创建（${schedule.readable}）`})}); if(publish){ await fetchJson('/api/v1/public/workflow/analysis/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({monitor_id:monitorId,keyword,window_days:7,news_hours:72,horizon:'24h',publish:true})}); } setWorkflowResult(`首次向导完成：monitor_id=${monitorId}`); await loadWorkflowState(false); }); }
+    function openBootstrapModal(){ openWorkflowModal('创建监测任务',`<div class="muted" style="font-size:13px;line-height:1.6;">仅创建监测任务，不自动创建定时任务，也不会自动生成报告。</div><div class="workflow-form"><label><strong>关键词（必填）</strong></label><input id="wf-bs-keyword" placeholder="例：现货黄金 / 白银 / 原油" /><label><strong>采样节奏</strong></label><select id="wf-bs-cadence"><option value="hourly">小时级</option><option value="daily" selected>天级</option></select><label><strong>来源类型（可选）</strong></label><select id="wf-bs-profile"><option value="auto" selected>自动选择</option><option value="commodity">大宗商品</option><option value="ecommerce">电商零售</option></select></div>`, async()=>{ const keyword=(document.getElementById('wf-bs-keyword')?.value||'').trim(); if(!keyword) throw new Error('请填写关键词。'); const cadence=document.getElementById('wf-bs-cadence')?.value||'daily'; const sourceProfile=document.getElementById('wf-bs-profile')?.value||'auto'; const data=await fetchJson('/api/v1/public/workflow/monitor/bootstrap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword,cadence,source_profile:sourceProfile,platforms:['news'],candidate_count:10})}); setWorkflowResult(`创建成功：monitor_id=${data.monitor_id||'-'}`); await loadWorkflowState(false); }); }
+    async function openConfigModal(){ const defaultMonitorId=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id||workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id||''; const monitors=await loadWorkflowMonitors().catch(()=>[]); const monitorOptions=(monitors||[]).map((m)=>{ const id=String(m.monitor_id||''); const keyword=String(m.keyword||'未命名关键词'); const obs=Number(m.observation_count||0); return `<option value="${htmlEsc(id)}"${id===defaultMonitorId?' selected':''}>${htmlEsc(keyword)}（观测 ${obs}，ID ${htmlEsc(id.slice(0,8))}）</option>`; }).join(''); openWorkflowModal('外部定时任务配置',`<div class="muted" style="font-size:13px;line-height:1.6;">保存“任务名 + 监测任务 + 执行频率 + 时区”。实际执行由外部调度器完成。</div><div class="workflow-form"><label><strong>任务名称（必填）</strong></label><input id="wf-cf-job-name" placeholder="例：openclaw-gold-ingest" /><label><strong>监测任务（必选）</strong></label><select id="wf-cf-monitor-select"><option value="">-- 请选择已有监测任务 --</option>${monitorOptions}</select>${renderIntervalControls('wf-cf',{days:0,hours:0,minutes:30,timezone:'Asia/Shanghai'})}<label><strong>失败策略（可选）</strong></label><select id="wf-cf-retry"><option value="no-retry" selected>失败不重试</option><option value="retry-3-exp">失败后最多重试3次（指数退避）</option></select><label><strong>备注（可选）</strong></label><textarea id="wf-cf-notes" placeholder="例：生产环境黄金监测"></textarea><div class="workflow-toggle"><input id="wf-cf-enabled" type="checkbox" checked />启用配置</div></div>`, async()=>{ const schedule=readScheduleConfig('wf-cf'); const payload={ job_name:(document.getElementById('wf-cf-job-name')?.value||'').trim(), monitor_id:(document.getElementById('wf-cf-monitor-select')?.value||'').trim(), cron_expr:schedule.cron_expr, timezone:schedule.timezone, retry_policy:document.getElementById('wf-cf-retry')?.value||'no-retry', notes:(document.getElementById('wf-cf-notes')?.value||'').trim()||`由网页配置（${schedule.readable}）`, enabled:Boolean(document.getElementById('wf-cf-enabled')?.checked) }; if(!payload.job_name||!payload.monitor_id) throw new Error('任务名称和监测任务必填。'); await fetchJson('/api/v1/public/workflow/external-configs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); setWorkflowResult(`调度配置已保存：${payload.job_name}`); await loadWorkflowState(false); }); }
+    async function openAnalysisModal(){ const defaultMonitorId=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id||workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id||''; const defaultKeyword=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.keyword||''; const monitors=await loadWorkflowMonitors().catch(()=>[]); const monitorOptions=(monitors||[]).map((m)=>{ const id=String(m.monitor_id||''); const keyword=String(m.keyword||'未命名关键词'); const obs=Number(m.observation_count||0); return `<option value="${htmlEsc(id)}" data-keyword="${htmlEsc(keyword)}"${id===defaultMonitorId?' selected':''}>${htmlEsc(keyword)}（观测 ${obs}，ID ${htmlEsc(id.slice(0,8))}）</option>`; }).join(''); openWorkflowModal('触发联合分析',`<div class="muted" style="font-size:13px;line-height:1.6;">手动触发一次“价格 + 新闻”联合分析，可填写多个关键词。</div><div class="workflow-form"><label><strong>选择监测任务（必选）</strong></label><select id="wf-an-monitor-select" onchange="window.onWorkflowMonitorPicked && window.onWorkflowMonitorPicked(this)"><option value="">-- 请选择已有监测任务 --</option>${monitorOptions}</select><label><strong>联合关键词（可选，支持多个）</strong></label><textarea id="wf-an-keywords" placeholder="例：黄金, 美联储, 美元指数">${htmlEsc(defaultKeyword)}</textarea><label><strong>价格窗口天数</strong></label><input id="wf-an-window-days" type="number" min="1" max="365" value="7" /><label><strong>新闻回看小时数</strong></label><input id="wf-an-news-hours" type="number" min="1" max="720" value="72" /><label><strong>预测展望周期</strong></label><select id="wf-an-horizon"><option value="24h" selected>24小时</option><option value="72h">72小时</option><option value="7d">7天</option></select><div class="workflow-toggle"><input id="wf-an-publish" type="checkbox" checked />提交报告到服务器</div></div>`, async()=>{ const monitorId=(document.getElementById('wf-an-monitor-select')?.value||'').trim(); if(!monitorId) throw new Error('请先选择监测任务。'); const rawKeywords=(document.getElementById('wf-an-keywords')?.value||'').trim(); const keywordList=rawKeywords.split(/[,\\n，]/g).map(x=>x.trim()).filter(x=>!!x); const payload={ monitor_id:monitorId, keyword:keywordList[0]||null, keywords:keywordList.length?keywordList:null, window_days:Number(document.getElementById('wf-an-window-days')?.value||7), news_hours:Number(document.getElementById('wf-an-news-hours')?.value||72), horizon:document.getElementById('wf-an-horizon')?.value||'24h', publish:Boolean(document.getElementById('wf-an-publish')?.checked) }; const out=await fetchJson('/api/v1/public/workflow/analysis/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); setWorkflowResult(`分析完成：预测=${out.forecast||'-'}，置信度=${out.confidence||'-'}，关键词=${(out.keywords_used||[]).join('、')||'-'}，ingest_id=${out.ingest_id||'-'}，状态=${out.ingest_status||'-'}`); await loadWorkflowState(false); }); window.onWorkflowMonitorPicked=(selectEl)=>{ const kwInput=document.getElementById('wf-an-keywords'); if(!selectEl||!kwInput) return; const selected=selectEl.options?.[selectEl.selectedIndex]; const pickedKeyword=(selected&&selected.dataset&&selected.dataset.keyword)||''; if(!kwInput.value.trim()&&pickedKeyword) kwInput.value=pickedKeyword; }; }
+    async function openRemediationModal(){ const diag=await fetchJson('/api/v1/public/workflow/diagnostics').catch(()=>null); const monitors=await loadWorkflowMonitors().catch(()=>[]); const defaultMonitorId=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.monitor_id||workflowStateCache?.overview?.external_cron?.jobs?.[0]?.monitor_id||''; const defaultKeyword=workflowStateCache?.overview?.price_monitoring?.recent?.[0]?.keyword||workflowStateCache?.overview?.news_library?.recent_keywords?.[0]?.keyword||''; const defaultJobName=suggestJobNameByKeyword(defaultKeyword); const monitorOptions=(monitors||[]).map((m)=>{ const id=String(m.monitor_id||''); const keyword=String(m.keyword||'未命名关键词'); const obs=Number(m.observation_count||0); return `<option value="${htmlEsc(id)}" data-keyword="${htmlEsc(keyword)}"${id===defaultMonitorId?' selected':''}>${htmlEsc(keyword)}（观测 ${obs}，ID ${htmlEsc(id.slice(0,8))}）</option>`; }).join(''); const diagSummary=diag?`诊断概览：error=${diag.error_count??0}，warn=${diag.warn_count??0}。`:'诊断概览：暂不可用。'; openWorkflowModal('一键修复向导',`<div class="muted" style="font-size:13px;line-height:1.6;">根据诊断结果自动补齐“监测任务 + 调度配置”最小可运行链路。${htmlEsc(diagSummary)}</div><div class="workflow-form"><label><strong>关键词（建议填写）</strong></label><input id="wf-fx-keyword" placeholder="例：黄金 / 原油" value="${htmlEsc(defaultKeyword)}" /><label><strong>已有监测任务（可选）</strong></label><select id="wf-fx-monitor-select" onchange="window.onWorkflowFixMonitorPicked && window.onWorkflowFixMonitorPicked(this)"><option value="">-- 请选择已有监测任务 --</option>${monitorOptions}</select><div class="workflow-toggle"><input id="wf-fx-auto-create-monitor" type="checkbox" checked />未选监测任务时自动创建</div><label><strong>采样节奏（创建监测任务时使用）</strong></label><select id="wf-fx-cadence"><option value="hourly">小时级</option><option value="daily" selected>天级</option></select><label><strong>任务名称（必填）</strong></label><input id="wf-fx-job-name" placeholder="例：openclaw-gold-ingest" value="${htmlEsc(defaultJobName)}" />${renderIntervalControls('wf-fx',{days:0,hours:0,minutes:30,timezone:'Asia/Shanghai'})}<div class="workflow-toggle"><input id="wf-fx-upsert-config" type="checkbox" checked />保存/覆盖外部调度配置</div><div class="workflow-toggle"><input id="wf-fx-config-enabled" type="checkbox" checked />启用该调度配置</div></div>`, async()=>{ const keyword=(document.getElementById('wf-fx-keyword')?.value||'').trim(); const autoCreateMonitor=Boolean(document.getElementById('wf-fx-auto-create-monitor')?.checked); const upsertConfig=Boolean(document.getElementById('wf-fx-upsert-config')?.checked); const cadence=document.getElementById('wf-fx-cadence')?.value||'daily'; let monitorId=(document.getElementById('wf-fx-monitor-select')?.value||'').trim(); const schedule=readScheduleConfig('wf-fx'); let jobName=(document.getElementById('wf-fx-job-name')?.value||'').trim(); const configEnabled=Boolean(document.getElementById('wf-fx-config-enabled')?.checked); const lines=[]; if(!monitorId&&autoCreateMonitor){ if(!keyword) throw new Error('未选监测任务时，请先填写关键词用于自动创建。'); const boot=await fetchJson('/api/v1/public/workflow/monitor/bootstrap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword,cadence,source_profile:'auto',platforms:['news'],candidate_count:10})}); monitorId=String(boot.monitor_id||'').trim(); if(!monitorId) throw new Error('自动创建监测任务失败：未返回 monitor_id。'); lines.push(`已自动创建监测任务：${monitorId}`); } if(!monitorId) throw new Error('请先选择监测任务，或勾选自动创建。'); if(!upsertConfig){ lines.push('已跳过调度配置保存（按你的选择）。'); } else { if(!jobName) jobName=suggestJobNameByKeyword(keyword||monitorId.slice(0,8)); await fetchJson('/api/v1/public/workflow/external-configs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({job_name:jobName,monitor_id:monitorId,cron_expr:schedule.cron_expr,timezone:schedule.timezone,enabled:configEnabled,retry_policy:'no-retry',notes:`由网页一键修复向导创建/更新（${schedule.readable}）`})}); lines.push(`已保存调度配置：${jobName} -> ${monitorId}`); } const newDiag=await fetchJson('/api/v1/public/workflow/diagnostics').catch(()=>null); if(newDiag) lines.push(`修复后诊断：error=${newDiag.error_count??0}，warn=${newDiag.warn_count??0}`); setWorkflowResult(lines.join('\\n'),{stickyMs:10*60*1000}); await loadWorkflowState(false); }); window.onWorkflowFixMonitorPicked=(selectEl)=>{ const kwInput=document.getElementById('wf-fx-keyword'); const jobInput=document.getElementById('wf-fx-job-name'); if(!selectEl||!kwInput||!jobInput) return; const selected=selectEl.options?.[selectEl.selectedIndex]; const pickedKeyword=(selected&&selected.dataset&&selected.dataset.keyword)||''; if(pickedKeyword){ kwInput.value=pickedKeyword; if(!jobInput.value.trim()) jobInput.value=suggestJobNameByKeyword(pickedKeyword); } }; }
+
+    document.getElementById('wf-refresh-btn')?.addEventListener('click',()=>loadWorkflowState(true));
+    document.getElementById('wf-run-diagnostics-btn')?.addEventListener('click',runWorkflowDiagnostics);
+    document.getElementById('wf-run-readiness-btn')?.addEventListener('click',runWorkflowReadinessCheck);
+    document.getElementById('wf-open-wizard-btn')?.addEventListener('click',openWizardModal);
+    document.getElementById('wf-open-remediation-btn')?.addEventListener('click',openRemediationModal);
+    document.getElementById('wf-open-bootstrap-btn')?.addEventListener('click',openBootstrapModal);
+    document.getElementById('wf-open-config-btn')?.addEventListener('click',openConfigModal);
+    document.getElementById('wf-open-analysis-btn')?.addEventListener('click',openAnalysisModal);
+    wfModalCancelBtn?.addEventListener('click',closeWorkflowModal);
+    wfModalSubmitBtn?.addEventListener('click',async()=>{ if(!wfModalSubmitHandler) return; try{ wfModalSubmitBtn.disabled=true; await wfModalSubmitHandler(); closeWorkflowModal(); } catch(e){ setWorkflowResult(`操作失败：${e?.message||'未知错误'}`,{stickyMs:60000}); } finally { wfModalSubmitBtn.disabled=false; }});
+    wfModal?.addEventListener('click',(e)=>{ if(e.target===wfModal) closeWorkflowModal(); });
+    setupDarkMode(); loadWorkflowState(); setInterval(loadWorkflowState, 5*60*1000);
+  </script>
+</body>
+</html>
+"""
+    )
 
 
 @app.get("/price-trend", summary="价格趋势页面")
@@ -3851,7 +3870,7 @@ def price_trend_page() -> HTMLResponse:
     <div class="wrap topbar-inner">
       <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
-        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
@@ -3860,6 +3879,7 @@ def price_trend_page() -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
+        <li><a href="/workflow">工作流管理</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
         <li class="active"><a href="/price-trend">价格趋势</a></li>
         <li><a href="/topic-analysis">专题分析</a></li>
@@ -4387,10 +4407,17 @@ def price_trend_page() -> HTMLResponse:
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      syncDarkModeButtonLabel();
       loadDetail();
     }
     function setupDarkMode() {
       if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark');
+      syncDarkModeButtonLabel();
+    }
+    function syncDarkModeButtonLabel() {
+      const btn = document.getElementById('dark-mode-btn');
+      if (!btn) return;
+      btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）';
     }
     (async () => {
       try {
@@ -4456,7 +4483,7 @@ def keyword_tracking_page() -> HTMLResponse:
     <div class="wrap topbar-inner">
       <div class="logo">OpenClaw市场趋势自动化分析平台</div>
       <div class="top-actions">
-        <button onclick="toggleDarkMode()">暗色模式</button>
+        <button id="dark-mode-btn" onclick="toggleDarkMode()">暗色模式</button>
         <button onclick="location.href='/docs'">接口文档</button>
       </div>
     </div>
@@ -4465,6 +4492,7 @@ def keyword_tracking_page() -> HTMLResponse:
     <div class="wrap">
       <ul id="category-nav">
         <li><a href="/">门户首页</a></li>
+        <li><a href="/workflow">工作流管理</a></li>
         <li><a href="/?page=news">新闻动态</a></li>
         <li><a href="/price-trend">价格趋势</a></li>
         <li><a href="/topic-analysis">专题分析</a></li>
@@ -4671,9 +4699,16 @@ def keyword_tracking_page() -> HTMLResponse:
     function toggleDarkMode() {
       document.body.classList.toggle('dark');
       localStorage.setItem('oc_dark', document.body.classList.contains('dark') ? '1' : '0');
+      syncDarkModeButtonLabel();
     }
     function setupDarkMode() {
       if (localStorage.getItem('oc_dark') === '1') document.body.classList.add('dark');
+      syncDarkModeButtonLabel();
+    }
+    function syncDarkModeButtonLabel() {
+      const btn = document.getElementById('dark-mode-btn');
+      if (!btn) return;
+      btn.textContent = document.body.classList.contains('dark') ? '暗色模式（开）' : '暗色模式（关）';
     }
     setupDarkMode();
     loadMonitors();

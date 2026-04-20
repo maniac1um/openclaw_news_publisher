@@ -32,6 +32,8 @@ class Settings(BaseSettings):
     # OpenClaw Gateway WebSocket endpoint.
     # It is used by the chat proxy in `app/api/v1/chat.py`.
     openclaw_ws_url: str = Field(default="ws://localhost:18789/ws")
+    # Probe timeout for checking OpenClaw Gateway availability (seconds).
+    openclaw_gateway_probe_timeout_seconds: float = Field(default=2.0)
 
     model_config = SettingsConfigDict(env_prefix="OPENCLAW_", env_file=".env", extra="ignore")
 

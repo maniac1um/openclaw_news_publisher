@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import os
@@ -9,6 +10,50 @@ from pathlib import Path
 from typing import Awaitable, Callable, Optional
 
 import websockets
+
+
+async def probe_openclaw_gateway(
+    *,
+    openclaw_ws_url: str,
+    timeout_seconds: float = 2.0,
+) -> dict:
+    """Lightweight connectivity probe for OpenClaw Gateway."""
+    started_at = time.monotonic()
+    timeout = max(float(timeout_seconds), 0.2)
+    try:
+        async with websockets.connect(
+            openclaw_ws_url,
+            open_timeout=timeout,
+            close_timeout=timeout,
+            ping_interval=None,
+        ) as oc_ws:
+            first_raw = await asyncio.wait_for(oc_ws.recv(), timeout=timeout)
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        try:
+            first = json.loads(first_raw)
+        except Exception:  # noqa: BLE001
+            first = {}
+        if first.get("type") == "event" and first.get("event") == "connect.challenge":
+            return {
+                "ok": True,
+                "ready": True,
+                "latency_ms": elapsed_ms,
+                "detail": "connect.challenge received",
+            }
+        return {
+            "ok": False,
+            "ready": False,
+            "latency_ms": elapsed_ms,
+            "detail": f"unexpected first event: {str(first)[:180]}",
+        }
+    except Exception as exc:  # noqa: BLE001
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        return {
+            "ok": False,
+            "ready": False,
+            "latency_ms": elapsed_ms,
+            "detail": f"{exc.__class__.__name__}: {exc}",
+        }
 
 
 def _b64url_encode(raw: bytes) -> str:

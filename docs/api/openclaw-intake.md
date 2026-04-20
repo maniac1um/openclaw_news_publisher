@@ -93,6 +93,9 @@
 为支持“尽量在网页完成配置与排障”，新增以下 public workflow 路由（无需 `X-Api-Key`）：
 
 - `GET /api/v1/public/workflow/state`
+- `GET /api/v1/public/workflow/gateway-status`
+- `GET /api/v1/public/workflow/diagnostics`
+- `GET /api/v1/public/workflow/run-readiness?monitor_id=<uuid>`（`monitor_id` 可选，不传时回退到最近 monitor）
 - `GET /api/v1/public/workflow/external-runs?limit=120`
 - `GET /api/v1/public/workflow/external-configs`
 - `POST /api/v1/public/workflow/external-configs`
@@ -102,7 +105,11 @@
 
 ### 说明
 
-- `workflow/state` 返回统一编排视图：`overview`、`internal_scheduler`、`external_scheduler_configs`、`external_scheduler_runs`。
+- `workflow/state` 返回统一编排视图：`overview`、`gateway`、`internal_scheduler`、`external_scheduler_configs`、`external_scheduler_runs`。
+- `workflow/gateway-status` 单独探测 OpenClaw Gateway sidecar 连通性（握手、延迟、错误详情）。
+- `workflow/diagnostics` 提供“一键诊断”聚合结果（Gateway、三库连通、调度配置、最近运行）及修复建议。
+- `workflow/run-readiness` 提供“一键可运行性验证”（monitor 观测、调度绑定、心跳新鲜度、联合分析 dry-run）。
+- `/workflow` 前端页面已将执行类按钮与诊断/验证按钮分组展示，结果区支持“粘性显示”（避免自动刷新覆盖）。
 - `workflow/monitor/bootstrap` 是 `openclaw/monitoring/bootstrap` 的网页封装入口。
 - `workflow/analysis/run` 与新闻触发联合分析逻辑保持一致，可选择 `publish=true|false`。
 
